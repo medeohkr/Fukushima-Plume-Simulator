@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fukushima Plume Simulator - OSCAR 2011</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #0a1929;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        /* Make controls ALWAYS on top */
+        #controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: rgba(20, 30, 48, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 15px;
+            color: white;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            width: 340px; /* Fixed width */
+        }
+
+        /* Make canvas stay behind */
+        #plumeCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+            display: block;
+        }
+
+        h3 {
+            margin-top: 0;
+            color: #4fc3f7;
+            border-bottom: 2px solid rgba(79, 195, 247, 0.3);
+            padding-bottom: 10px;
+        }
+
+        .parameter-section h4 {
+            color: #b0bec5;
+            margin-top: 20px;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        .slider-container {
+            margin: 15px 0;
+        }
+
+        .slider-container label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: #b0bec5;
+        }
+
+        .slider-container small {
+            display: block;
+            margin-top: 5px;
+            font-size: 12px;
+            color: #78909c;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #4fc3f7;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid white;
+        }
+
+        .value-display {
+            display: inline-block;
+            min-width: 40px;
+            text-align: right;
+            color: #4fc3f7;
+            font-weight: bold;
+        }
+
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            justify-content: space-between;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #2c3e50;
+            border-radius: 24px;
+            transition: .4s;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            border-radius: 50%;
+            transition: .4s;
+        }
+
+        input:checked + .toggle-slider {
+            background-color: #4fc3f7;
+        }
+
+        input:checked + .toggle-slider:before {
+            transform: translateX(26px);
+        }
+
+        .button-section {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        button {
+            background: linear-gradient(135deg, #4fc3f7, #2979ff);
+            color: white;
+            border: none;
+            padding: 14px 0;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 15px;
+            transition: all 0.3s;
+            width: 100%;
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(79, 195, 247, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button#resetBtn {
+            background: linear-gradient(135deg, #ff6b6b, #ff4757);
+        }
+
+        .data-source {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 12px;
+            color: #90a4ae;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <!-- CANVAS ELEMENT (MISSING IN YOUR VERSION) -->
+    <canvas id="plumeCanvas"></canvas>
+
+    <!-- CONTROLS PANEL -->
+    <div id="controls">
+        <h3>🌊 Fukushima Plume Simulator</h3>
+
+        <div class="parameter-section">
+            <h4>⚙️ Simulation Parameters</h4>
+
+            <div class="slider-container">
+                <label>Kuroshio Strength: <span id="kuroshioValue">1.0</span>x</label>
+                <input type="range" id="kuroshioSlider" min="0" max="3" step="0.1" value="1.0">
+                <small>Enhance the Kuroshio current</small>
+            </div>
+
+            <div class="slider-container">
+                <label>Turbulent Diffusion: <span id="diffusionValue">2.0</span> km/day</label>
+                <input type="range" id="diffusionSlider" min="0" max="10" step="0.1" value="2.0">
+                <small>Random particle motion</small>
+            </div>
+
+            <div class="slider-container">
+                <label>Simulation Speed: <span id="speedValue">1.0</span>x real-time</label>
+                <input type="range" id="speedSlider" min="0.1" max="10" step="0.1" value="1.0">
+                <small>1x = 1 simulation day per real second</small>
+            </div>
+
+            <div class="toggle-container">
+                <label>Bilinear Interpolation</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="interpolationToggle" checked>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+
+            <div class="toggle-container">
+                <label>Radioactive Decay</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="decayToggle" checked>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <div class="button-section">
+            <button id="runBtn" class="start-btn">🚀 Start Simulation</button>
+            <button id="resetBtn" class="reset-btn">🔄 Reset & Change Parameters</button>
+            <small style="display: block; margin-top: 10px; color: #888;">
+                Note: Parameters can only be changed after resetting
+            </small>
+        </div>
+
+        <div class="data-source">
+            Current Data: <span id="dataSource">OSCAR 2011</span><br>
+            <small>Surface currents from March 11 - June 11, 2011</small>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT IMPORTS (MISSING IN YOUR VERSION) -->
+    <script src="particleEngine.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

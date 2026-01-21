@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug - Fukushima Simulator</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        .panel {
+            background: #f5f5f5;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        button { margin: 5px; padding: 8px 15px; }
+        #log {
+            background: black;
+            color: #0f0;
+            padding: 10px;
+            height: 200px;
+            overflow-y: scroll;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h2>🔧 Debug Console</h2>
+
+    <div class="panel">
+        <h3>1. Test Data Loading</h3>
+        <button onclick="testLoad()">Load current_field.json</button>
+        <div id="dataStatus">Not loaded</div>
+    </div>
+
+    <div class="panel">
+        <h3>2. Test Coordinate Conversion</h3>
+        <button onclick="testConversion()">Test Fukushima → Grid</button>
+        <div id="conversionResult"></div>
+    </div>
+
+    <div class="panel">
+        <h3>Console Output:</h3>
+        <div id="log"></div>
+    </div>
+
+    <script>
+        function log(msg) {
+            const logDiv = document.getElementById('log');
+            logDiv.innerHTML += msg + '<br>';
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function testLoad() {
+            try {
+                const response = await fetch('data/current_field.json');
+                const data = await response.json();
+                log('✅ Data loaded successfully');
+                log(`  Grid: ${data.u.length}×${data.u[0].length}`);
+                log(`  Lons: ${data.lons[0]} to ${data.lons[data.lons.length-1]}`);
+                log(`  Lats: ${data.lats[0]} to ${data.lats[data.lats.length-1]}`);
+
+                // Test a known point
+                const fukushimaLon = 141.25;
+                const fukushimaLat = 37.25;
+                const lonIdx = findNearestIndex(fukushimaLon, data.lons);
+                const latIdx = findNearestIndex(fukushimaLat, data.lats);
+
+                log(`  Fukushima currents: u=${data.u[latIdx][lonIdx].toFixed(2)}, v=${data.v[latIdx][lonIdx].toFixed(2)} km/day`);
+
+                document.getElementById('dataStatus').innerHTML =
+                    `<span style="color:green">✅ Loaded (${data.u.length}×${data.u[0].length} grid)</span>`;
+
+            } catch (error) {
+                log(`❌ Error: ${error.message}`);
+                document.getElementById('dataStatus').innerHTML =
+                    `<span style="color:red">❌ Failed: ${error.message}</span>`;
+            }
+        }
+
+        function testConversion() {
+            // Test the conversion logic
+            const FUKUSHIMA_LON = 141.25;
+            const FUKUSHIMA_LAT = 37.25;
+            const LON_SCALE = 88.8;
+            const LAT_SCALE = 111.0;
+
+            const testPoints = [
+                { x: 0, y: 0, desc: "Fukushima" },
+                { x: 100, y: 0, desc: "100km east" },
+                { x: 0, y: 100, desc: "100km north" }
+            ];
+
+            let result = '';
+            testPoints.forEach(p => {
+                const lon = FUKUSHIMA_LON + p.x / LON_SCALE;
+                const lat = FUKUSHIMA_LAT + p.y / LAT_SCALE;
+                result += `${p.desc}: (${p.x}, ${p.y})km → (${lon.toFixed(2)}E, ${lat.toFixed(2)}N)<br>`;
+            });
+
+            document.getElementById('conversionResult').innerHTML = result;
+            log('✅ Coordinate conversion test complete');
+        }
+
+        function findNearestIndex(value, array) {
+            let minDist = Infinity;
+            let minIdx = 0;
+            for (let i = 0; i < array.length; i++) {
+                const dist = Math.abs(array[i] - value);
+                if (dist < minDist) {
+                    minDist = dist;
+                    minIdx = i;
+                }
+            }
+            return minIdx;
+        }
+    </script>
+</body>
+</html>
