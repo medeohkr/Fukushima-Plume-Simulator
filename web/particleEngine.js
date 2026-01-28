@@ -269,10 +269,10 @@ logFrameDebug(deltaDays, particle, current) {
     }
 
     async loadEKEData() {
-        console.log('🌀 Loading AVISO EKE data...');
+        console.log('🌀 Loading synthetic EKE data...');
 
         try {
-            const response = await fetch('data/aviso_eke_pacific.json');
+            const response = await fetch('data/eke_pacific.json');
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
             this.ekeData = await response.json();
