@@ -344,6 +344,109 @@ class StreamingHYCOMLoader {
             gridShape: monthData.grid_shape
         };
     }
+    // Add to your hycomLoader.js file:
+
+    // ==================== LAND MASK METHODS ====================
+
+    async getLandMask(monthIndex = 0) {
+        // Ensure month is loaded
+        const monthData = await this.loadMonth(monthIndex);
+
+        const { nLat, nLon, uArray } = monthData;
+        const mask = new Array(nLat).fill().map(() => new Array(nLon).fill(false));
+
+        // Mark ocean cells (where u is not NaN)
+        for (let i = 0; i < nLat; i++) {
+            for (let j = 0; j < nLon; j++) {
+                const idx = i * nLon + j;
+                mask[i][j] = !isNaN(uArray[idx]);
+            }
+        }
+
+        return {
+            mask,
+            nLat,
+            nLon,
+            oceanCount: mask.flat().filter(cell => cell).length,
+            landCount: mask.flat().filter(cell => !cell).length
+        };
+    }
+
+    async isOcean(lon, lat, monthIndex = 0) {
+        try {
+            // Get nearest grid cell
+            const monthData = await this.loadMonth(monthIndex);
+            const cell = this.findNearestCell(lon, lat, monthData);
+
+            if (!cell) return false;
+
+            // Check if it's ocean (u value is not NaN)
+            const u = monthData.uArray[cell.idx];
+            return !isNaN(u);
+
+        } catch (error) {
+            console.warn('Land mask check failed:', error);
+            return false; // Default to land if check fails
+        }
+    }
+
+    async findNearestOceanCell(lon, lat, monthIndex = 0, maxSearchRadius = 10) {
+        const monthData = await this.loadMonth(monthIndex);
+        const { nLat, nLon, uArray } = monthData;
+
+        // First try exact cell
+        const exactCell = this.findNearestCell(lon, lat, monthData);
+        if (exactCell && !isNaN(uArray[exactCell.idx])) {
+            return exactCell;
+        }
+
+        // If land, search neighboring cells
+        const centerI = exactCell ? exactCell.i : Math.floor(nLat/2);
+        const centerJ = exactCell ? exactCell.j : Math.floor(nLon/2);
+
+        // Spiral search outward
+        for (let radius = 1; radius <= maxSearchRadius; radius++) {
+            for (let di = -radius; di <= radius; di++) {
+                for (let dj = -radius; dj <= radius; dj++) {
+                    // Only check cells at current radius
+                    if (Math.max(Math.abs(di), Math.abs(dj)) !== radius) continue;
+
+                    const i = centerI + di;
+                    const j = centerJ + dj;
+
+                    if (i >= 0 && i < nLat && j >= 0 && j < nLon) {
+                        const idx = i * nLon + j;
+                        if (!isNaN(uArray[idx])) {
+                            return {
+                                i, j, idx,
+                                lon: monthData.lonArray[idx],
+                                lat: monthData.latArray[idx]
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        return null; // No ocean cell found within search radius
+    }
+
+    // Helper method to push particle back to ocean
+    async pushToOcean(particle, monthIndex = 0) {
+        const lon = this.FUKUSHIMA_LON + (particle.x / this.LON_SCALE);
+        const lat = this.FUKUSHIMA_LAT + (particle.y / this.LAT_SCALE);
+
+        const oceanCell = await this.findNearestOceanCell(lon, lat, monthIndex);
+
+        if (oceanCell) {
+            // Convert back to km coordinates
+            particle.x = (oceanCell.lon - this.FUKUSHIMA_LON) * this.LON_SCALE;
+            particle.y = (oceanCell.lat - this.FUKUSHIMA_LAT) * this.LAT_SCALE;
+            return true;
+        }
+
+        return false;
+    }
 }
 
 // Global instance

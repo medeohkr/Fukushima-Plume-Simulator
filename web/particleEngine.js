@@ -139,7 +139,6 @@ class ParticleEngine {
         }
     }
 
-    // ==================== SIMULATION CONTROL ====================
 
     startSimulation() {
         if (this.isRunning) {
@@ -150,24 +149,50 @@ class ParticleEngine {
         console.log('🚀 Starting simulation');
         this.isRunning = true;
         this.lastUpdateTime = Date.now();
-        this.currentSimulationTime = new Date(this.simulationStartTime);
 
-        // Reset stats
-        this.resetStats();
+        // Only reset the clock if this is a fresh start (no particles released yet)
+        if (this.stats.totalReleased === 0) {
+            this.currentSimulationTime = new Date(this.simulationStartTime);
+            this.stats.simulationDays = 0;
 
-        // Release initial particles for first 10 days (March 11-21, 2011)
-        const initialActivityPBq = 2.0;
-        const initialParticles = Math.floor(initialActivityPBq * 1e6 * this.activityToParticleScale);
+            // Release initial particles for first 10 days (March 11-21, 2011)
+            const initialActivityPBq = 2.0;
+            const initialParticles = Math.floor(initialActivityPBq * 1e6 * this.activityToParticleScale);
 
-        if (initialParticles > 0) {
-            const released = this.releaseParticles(initialParticles);
-            console.log(`📈 Released ${released} particles for early March (11-21, 2011)`);
+            if (initialParticles > 0) {
+                const released = this.releaseParticles(initialParticles);
+                console.log(`📈 Released ${released} particles for early March (11-21, 2011)`);
+            }
         }
     }
 
-    stopSimulation() {
-        console.log('⏸️ Stopping simulation');
+    pauseSimulation() {
+        if (!this.isRunning) {
+            console.warn('Simulation already paused');
+            return;
+        }
+
+        console.log('⏸️ Pausing simulation');
         this.isRunning = false;
+        // Time continues from here when resumed
+    }
+
+    resumeSimulation() {
+        if (this.isRunning) {
+            console.warn('Simulation already running');
+            return;
+        }
+
+        console.log('▶️ Resuming simulation');
+        this.isRunning = true;
+        this.lastUpdateTime = Date.now(); // Reset timer for delta calculation
+        // currentSimulationTime stays as-is
+    }
+
+    stopSimulation() {
+        console.log('⏹️ Stopping simulation (pause)');
+        this.isRunning = false;
+        // Don't reset time - this is just a pause
     }
 
     resetSimulation() {
@@ -190,7 +215,6 @@ class ParticleEngine {
         // Reset stats
         this.resetStats();
     }
-
     resetStats() {
         this.stats = {
             totalReleased: 0,
@@ -205,10 +229,10 @@ class ParticleEngine {
 
         // Ocean-only release box (east of Fukushima)
         const OCEAN_BOX = {
-            minLon: 142.0,  // Further east - in open ocean
-            maxLon: 142.5,
-            minLat: 36.5,
-            maxLat: 37.5
+            minLon: 141.21,  // Further east - in open ocean
+            maxLon: 141.41,
+            minLat: 37.4,
+            maxLat: 37.6,
         };
 
         for (const p of this.particlePool) {
@@ -348,10 +372,17 @@ class ParticleEngine {
         let updatedCount = 0;
         let decayedCount = 0;
 
+        // Pre-load month data for land checks (more efficient)
+        const monthData = await this.hycomLoader.loadMonth(monthIndex);
+
         for (let i = 0; i < velocities.length; i++) {
             const p = activeParticles[particleIndices[i]];
             const velocity = velocities[i];
             const diffusivity = diffusivities[i];
+
+            // STORE PREVIOUS POSITION BEFORE MODIFICATION
+            const prevX = p.x;
+            const prevY = p.y;
 
             // HYCOM advection
             if (velocity.found) {
@@ -371,6 +402,54 @@ class ParticleEngine {
                 p.y += (Math.random() - 0.5) * stepSize * 2.0;
             }
 
+            // LAND CHECK - AFTER movement
+            const lon = this.FUKUSHIMA_LON + (p.x / this.LON_SCALE);
+            const lat = this.FUKUSHIMA_LAT + (p.y / this.LAT_SCALE);
+
+            // Check if particle is on land
+            try {
+                const cell = this.hycomLoader.findNearestCell(lon, lat, monthData);
+
+                if (cell) {
+                    const u = monthData.uArray[cell.idx];
+                    const isOcean = !isNaN(u);
+
+                    if (!isOcean) {
+                        // Particle moved onto land - revert to previous position
+                        p.x = prevX;
+                        p.y = prevY;
+
+                        // Optionally: Try to find nearest ocean cell and push toward it
+                        const oceanCell = await this.hycomLoader.findNearestOceanCell(lon, lat, monthIndex);
+                        if (oceanCell && oceanCell.distance < 50.0) { // Only if ocean is reasonably close
+                            const oceanLon = oceanCell.lon;
+                            const oceanLat = oceanCell.lat;
+
+                            // Calculate direction vector toward ocean
+                            const dx = (oceanLon - lon) * this.LON_SCALE;
+                            const dy = (oceanLat - lat) * this.LAT_SCALE;
+                            const dist = Math.sqrt(dx*dx + dy*dy);
+
+                            if (dist > 0) {
+                                // Add small push toward ocean
+                                const pushStrength = 3.0; // km/day
+                                p.x += (dx / dist) * pushStrength * deltaDays;
+                                p.y += (dy / dist) * pushStrength * deltaDays;
+                            }
+                        }
+                    }
+                } else {
+                    // No cell found - probably far outside grid, revert
+                    p.x = prevX;
+                    p.y = prevY;
+                }
+            } catch (error) {
+                console.warn('Land check error:', error);
+                // If check fails, revert to previous position
+                p.x = prevX;
+                p.y = prevY;
+            }
+
             // Radioactive decay
             p.age += deltaDays;
             if (this.params.decayEnabled) {
@@ -382,10 +461,12 @@ class ParticleEngine {
                 }
             }
 
-            // Update position trail
-            p.history.push({ x: p.x, y: p.y });
-            if (p.history.length > 8) {
-                p.history.shift();
+            // Update position trail (only if particle moved significantly)
+            if (Math.abs(p.x - prevX) > 0.1 || Math.abs(p.y - prevY) > 0.1) {
+                p.history.push({ x: p.x, y: p.y });
+                if (p.history.length > 8) {
+                    p.history.shift();
+                }
             }
         }
 
@@ -397,7 +478,6 @@ class ParticleEngine {
             console.log(`💀 ${decayedCount} particles decayed`);
         }
     }
-
     getCurrentMonthIndex() {
         const monthsElapsed = Math.floor(this.stats.simulationDays / 30.44);
         return Math.min(23, Math.max(0, monthsElapsed));

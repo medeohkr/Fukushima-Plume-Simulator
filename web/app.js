@@ -415,6 +415,15 @@ function toggleHeatmap() {
     if (showHeatmap) {
         // Heatmap ON
         deckCanvas.style.opacity = '1';
+
+        // FORCE refresh when toggling ON
+        if (engine && !engine.isRunning) {
+            // Get current particles and create heatmap
+            const particles = engine.getActiveParticles();
+            if (particles.length > 0) {
+                updateDeckGLHeatmap(particles);
+            }
+        }
         console.log('🔥 Heatmap ON - Particles hidden');
     } else {
         // Heatmap OFF
@@ -524,26 +533,17 @@ function animate() {
 function updateDateTimeDisplay() {
     if (!engine) return;
 
-    // Update from engine
+    // Update simulation date from engine
     if (engine.getFormattedTime) {
         const time = engine.getFormattedTime();
         currentSimulationDate = new Date(
-            time.year, time.month - 1, time.day,
-            time.hour, time.minute, time.second
+            time.year, time.month - 1, time.day
         );
         simulationDay = engine.stats.simulationDays || 0;
-    } else {
-        simulationDay = engine.stats.simulationDays || 0;
-        currentSimulationDate = new Date(
-            simulationStartDate.getTime() + (simulationDay * 86400000)
-        );
     }
 
-    // Update display
+    // Update date display only (no time)
     const dateDisplay = document.getElementById('dateDisplay');
-    const timeLabel = document.getElementById('timeLabel');
-    const simDayDisplay = document.getElementById('simDay');
-
     if (dateDisplay) {
         const dateStr = currentSimulationDate.toLocaleDateString('en-US', {
             year: 'numeric',
@@ -554,18 +554,18 @@ function updateDateTimeDisplay() {
         dateLabel.textContent = dateStr;
     }
 
-    if (timeLabel) {
-        const timeStr = currentSimulationDate.toLocaleTimeString('en-US', {
-            hour12: false,
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-        });
-        timeLabel.textContent = timeStr + ' UTC';
-    }
-
+    // Update simulation day
+    const simDayDisplay = document.getElementById('simDay');
     if (simDayDisplay) {
         simDayDisplay.textContent = Math.floor(simulationDay);
+    }
+
+    // REMOVE time display completely
+    const timeLabel = document.getElementById('timeLabel');
+    if (timeLabel) {
+        timeLabel.textContent = ''; // Empty string
+        // Or you can remove it from DOM entirely:
+        // timeLabel.style.display = 'none';
     }
 }
 function setupDiffusionControls() {
@@ -682,35 +682,61 @@ function setupControls() {
         });
     }
 
-    // Start/Stop button
+    // Start/Pause/Resume button
     if (startBtn) {
         startBtn.addEventListener('click', () => {
             if (!engine) return;
 
             if (!engine.isRunning) {
-                engine.startSimulation();
-                startBtn.textContent = '⏹️ Stop Simulation';
+                // Determine if this is a fresh start or resume
+                if (engine.stats.totalReleased === 0 && engine.stats.simulationDays === 0) {
+                    // Fresh start - use startSimulation
+                    engine.startSimulation();
+                    startBtn.textContent = '⏸️ Pause Simulation';
+                    console.log('🚀 Simulation started fresh');
+                } else {
+                    // Resume from pause - use resumeSimulation
+                    if (engine.resumeSimulation) {
+                        engine.resumeSimulation();
+                    } else {
+                        engine.startSimulation();
+                    }
+                    startBtn.textContent = '⏸️ Pause Simulation';
+                    console.log('▶️ Simulation resumed');
+                }
+
                 startBtn.style.background = 'linear-gradient(135deg, #ff6b6b, #ff4757)';
-                console.log('🚀 Simulation started');
             } else {
-                engine.stopSimulation();
-                startBtn.textContent = '▶ Start Simulation';
+                // Pause the simulation
+                if (engine.pauseSimulation) {
+                    engine.pauseSimulation();
+                } else {
+                    engine.stopSimulation();
+                }
+
+                startBtn.textContent = '▶ Resume Simulation';
                 startBtn.style.background = 'linear-gradient(135deg, #4fc3f7, #2979ff)';
-                console.log('⏸️ Simulation stopped');
+                console.log('⏸️ Simulation paused');
             }
         });
     }
 
-    // Reset button
+    // Reset button - fully reset everything
     if (resetBtn) {
         resetBtn.addEventListener('click', () => {
             if (engine) {
                 if (particleCanvas && particleCanvas.clearAllParticles) {
                     particleCanvas.clearAllParticles();
                 }
+
+                // Reset the engine
                 engine.resetSimulation();
 
-                // Reset UI
+                // CRITICAL: Also reset the UI's date variables
+                currentSimulationDate = new Date(simulationStartDate);
+                simulationDay = 0;
+
+                // Reset UI button to "Start"
                 if (startBtn) {
                     startBtn.textContent = '▶ Start Simulation';
                     startBtn.style.background = 'linear-gradient(135deg, #4fc3f7, #2979ff)';
@@ -729,15 +755,16 @@ function setupControls() {
                     document.getElementById('speedValue').textContent = '1.0';
                 }
 
+                // Force immediate UI update
+                updateDateTimeDisplay();
                 updateUIForEngine();
-                console.log('✅ Simulation reset');
+                console.log('🔄 Simulation fully reset');
             }
         });
     }
 
     console.log('✅ Controls setup complete');
 }
-
 function updateUIForEngine() {
     if (!engine) return;
 
@@ -746,16 +773,6 @@ function updateUIForEngine() {
     // Update sliders
     const diffusionSlider = document.getElementById('diffusionSlider');
     const speedSlider = document.getElementById('speedSlider');
-
-    // Hide Kuroshio controls
-    const kuroshioSlider = document.getElementById('kuroshioSlider');
-    if (kuroshioSlider) {
-        kuroshioSlider.style.display = 'none';
-    }
-    const kuroshioLabel = document.querySelector('label[for="kuroshioSlider"]');
-    if (kuroshioLabel) {
-        kuroshioLabel.style.display = 'none';
-    }
 
     // Update diffusion slider
     if (diffusionSlider) {
@@ -778,14 +795,19 @@ function updateUIForEngine() {
         document.getElementById('speedValue').textContent = params.simulationSpeed.toFixed(1);
     }
 
-    // Update start/stop button
+    // Update start/pause/resume button
     const startBtn = document.getElementById('startBtn');
     if (startBtn) {
         if (engine.isRunning) {
-            startBtn.textContent = '⏹️ Stop Simulation';
+            startBtn.textContent = '⏸️ Pause Simulation';
             startBtn.style.background = 'linear-gradient(135deg, #ff6b6b, #ff4757)';
         } else {
-            startBtn.textContent = '▶ Start Simulation';
+            // Determine button text based on simulation state
+            if (engine.stats.totalReleased === 0 && engine.stats.simulationDays === 0) {
+                startBtn.textContent = '▶ Start Simulation'; // Fresh start
+            } else {
+                startBtn.textContent = '▶ Resume Simulation'; // Paused state
+            }
             startBtn.style.background = 'linear-gradient(135deg, #4fc3f7, #2979ff)';
         }
     }
