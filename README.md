@@ -1,25 +1,35 @@
-# Fukushima-Plume-Simulator
-"Simulation of radionuclide dispersion from Fukushima Daiichi using OSCAR ocean current data"
-# 🌊 Fukushima Radionuclide Plume Simulator
+# 🌊 Fukushima Radioactive Plume Simulator
 
-Interactive simulation of radionuclide dispersion from Fukushima Daiichi Nuclear Power Plant into the Pacific Ocean.
+**Real-time simulation of Cs-137 transport from the 2011 Fukushima disaster**
 
-## 📋 Features
-- Real ocean current data from NASA OSCAR
-- Particle-based simulation of Cs-137, Sr-90, H-3 isotopes  
-- Radioactive decay modeling
-- High-quality visualizations and animations
+[Live Demo] • [Interactive Visualization] • [Scientific Documentation]
 
-## 🚀 Quick Start
+## 🎯 Features
+- **Real HYCOM ocean currents** (2011-2013, 0.04° resolution)
+- **Physics-based EKE diffusion** from CMEMS/AVISO satellite data
+- **WebGL-accelerated heatmap visualization**
+- **Time-accurate release schedule** based on Kanda (2013)
+- **Radioactive decay physics** (Cs-137 half-life: 30.17 years)
 
-### Installation
-```bash
-# Clone repository
-git clone <your-repo-url>
-cd Fukushima_Plume_Simulator
+## 🧪 Science Behind It
+- Advection: HYCOM ocean model currents
+- Diffusion: K = C × (α × EKE) × Tₗ where EKE = 0.5×(ugosa² + vgosa²)
+- Tuned α = 0.1 to match observed mean diffusivity of ~130 m²/s
+- Realistic range: 0-3000 m²/s (calm seas to Kuroshio eddies)
 
-# Install dependencies
-pip install -r requirements.txt
+## 🚀 Tech Stack
+- Frontend: JavaScript, Leaflet, deck.gl (WebGL)
+- Data processing: Python, xarray, numpy
+- Visualization: Canvas 2D + WebGL heatmaps
 
-# Download OSCAR data (place in data/ folder)
-# Get from: https://podaac.jpl.nasa.gov/dataset/OSCAR_L4_OC_INTERIM_V2.0
+## 📊 Results
+The simulation shows:
+- Plume reaches Alaska coast by ~April 2012 (13 months)
+- Crosses 180° longitude by late 2012
+- Matches published transport timescales
+- Demonstrates Kuroshio's role in rapid Pacific crossing
+
+## 🎓 About
+Built by Leo Ying, 15-year-old aspiring nuclear engineer.
+This project combines satellite data, ocean physics, and interactive visualization
+to help understand one of history's largest ocean pollution events.
