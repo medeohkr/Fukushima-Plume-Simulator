@@ -1,2 +1,15 @@
-*.nc
-archive/
+.DS_Store
+._*
+*/.DS_Store
+
+# Data folders
+web/data/
+scripts/output/
+
+# Python
+__pycache__/
+*.pyc
+
+# Node/JS  
+node_modules/
+web/eke_ultra_optimized/

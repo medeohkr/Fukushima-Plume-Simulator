@@ -1,5 +1,5 @@
-// web/app.js - HYBRID LEAFLET + DECK.GL VERSION
-console.log('=== app.js STARTING HYBRID VERSION ===');
+// web/app.js - HYBRID LEAFLET + DECK.GL VERSION WITH HYCOM
+console.log('=== app.js STARTING HYBRID VERSION WITH HYCOM ===');
 
 // Global variables
 let engine = null;
@@ -15,104 +15,119 @@ let heatmapLayer = null;
 let showHeatmap = true;
 
 let heatmapParams = {
-    intensity: 10.0,     // Much higher!
-    radiusPixels: 150,   // Larger radius
+    intensity: 10.0,
+    radiusPixels: 150,
     opacity: 0.9,
-    threshold: 0.001,    // Lower threshold
-    useLogScale: true,   // Enable log scaling
-    gridSize: 0.5        // Grid resolution in degrees
+    threshold: 0.001,
+    useLogScale: true,
+    gridSize: 0.5
 };
 
 // Time globals
 let simulationStartDate = new Date('2011-03-11T00:00:00Z');
 let currentSimulationDate = new Date(simulationStartDate);
 let simulationDay = 0;
-let timeSliderDragging = false;
 
 // Heatmap data cache
 let heatmapData = [];
 let lastHeatmapUpdate = 0;
-const HEATMAP_UPDATE_INTERVAL = 500; // Update every second
+const HEATMAP_UPDATE_INTERVAL = 500;
 
 async function init() {
-    console.log('=== INITIALIZATION HYBRID VERSION ===');
+    console.log('=== INITIALIZATION HYBRID VERSION WITH HYCOM ===');
 
-    // Initialize date/time
-    simulationStartDate = new Date('2011-03-11T00:00:00Z');
-    currentSimulationDate = new Date(simulationStartDate);
-    simulationDay = 0;
+    // Create loading screen
+    const loadingStatus = createStatusElement();
+    updateLoadingStatus('Initializing...', 10);
 
-    // 1. CREATE LEAFLET MAP (as before)
-    console.log('Creating Leaflet map...');
-    simMap = L.map('map', {
-        center: [25.0, 165.0],
-        zoom: 3,
-        minZoom: 2,
-        maxZoom: 8,
-        worldCopyJump: false,
-        attributionControl: true,
-        zoomControl: true,
-        maxBounds: [[-90, -180], [90, 360]]
-    });
+    try {
+        // 1. CREATE LEAFLET MAP
+        updateLoadingStatus('Creating map...', 20);
+        console.log('Creating Leaflet map...');
+        simMap = L.map('map', {
+            center: [25.0, 165.0],
+            zoom: 3,
+            minZoom: 2,
+            maxZoom: 8,
+            worldCopyJump: false,
+            attributionControl: true,
+            zoomControl: true,
+            maxBounds: [[-90, -180], [90, 360]]
+        });
 
-    // 2. ADD BASEMAP (Dark theme)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '© OpenStreetMap, © CARTO',
-        maxZoom: 8
-    }).addTo(simMap);
+        // 2. ADD BASEMAP
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '© OpenStreetMap, © CARTO',
+            maxZoom: 8
+        }).addTo(simMap);
 
-    // 3. CREATE PARTICLE OVERLAY (Leaflet circles)
-    console.log('Creating particle overlay...');
-    particleCanvas = createCanvasOverlay();
-    simMap.addLayer(particleCanvas);
+        // 3. CREATE PARTICLE OVERLAY
+        updateLoadingStatus('Creating visualization...', 30);
+        console.log('Creating particle overlay...');
+        particleCanvas = createCanvasOverlay();
+        simMap.addLayer(particleCanvas);
 
-    // 4. INITIALIZE DECK.GL OVERLAY
-    console.log('Initializing deck.gl overlay...');
-    await initDeckGL();
+        // 4. INITIALIZE DECK.GL
+        updateLoadingStatus('Initializing WebGL...', 40);
+        console.log('Initializing deck.gl overlay...');
+        await initDeckGL();
 
-    // 5. INITIALIZE ENGINE
-    if (typeof ParticleEngine === 'function') {
-        engine = new ParticleEngine(20000);
+        // 5. INITIALIZE PARTICLE ENGINE WITH HYCOM
+        updateLoadingStatus('Loading ocean data...', 50);
+        if (typeof ParticleEngine === 'function') {
+            engine = new ParticleEngine(10000);
 
-        console.log('Loading ocean data...');
-        try {
-            const success = await engine.init();
-            if (!success) {
-                console.warn('Using fallback data');
-                showDataWarning('Using fallback data');
+            console.log('Loading HYCOM ocean currents...');
+            try {
+                const success = await engine.init();
+                if (!success) {
+                    console.warn('Using fallback data');
+                    showDataWarning('Using fallback diffusion data');
+                }
+            } catch (error) {
+                console.error('Engine init failed:', error);
+                showErrorMessage('Failed to load data. Using fallback.');
             }
-        } catch (error) {
-            console.error('Engine init failed:', error);
-            showErrorMessage('Failed to load data. Using fallback.');
+        } else {
+            console.error('ParticleEngine not found!');
+            showErrorMessage('ParticleEngine class not loaded');
+            return false;
         }
-    } else {
-        console.error('ParticleEngine not found!');
+
+        // 6. ADD MAP CONTROLS
+        updateLoadingStatus('Adding controls...', 70);
+        addMapControls(simMap);
+
+        // 7. SET UP CONTROLS
+        updateLoadingStatus('Finalizing...', 90);
+        setupControls();
+        setupHeatmapControls();
+        updateUIForEngine();
+        updateDateTimeDisplay();
+
+        // 8. ADD MAP EVENT LISTENERS
+        simMap.on('moveend resize zoomend', function() {
+            updateCanvasOverlay();
+            updateDeckGLView();
+        });
+
+        // 9. START ANIMATION
+        updateLoadingStatus('Ready!', 100);
+        setTimeout(() => {
+            hideLoadingStatus();
+            animate();
+        }, 500);
+
+        console.log('✅ Hybrid Leaflet + deck.gl with HYCOM initialized');
+        return true;
+
+    } catch (error) {
+        console.error('Initialization failed:', error);
+        showErrorMessage(`Initialization failed: ${error.message}`);
+        hideLoadingStatus();
         return false;
     }
-
-    // 6. ADD MAP CONTROLS
-    addMapControls(simMap);
-
-
-    // 8. SET UP YOUR EXISTING SIMULATION CONTROLS
-    setupControls();
-    setupHeatmapControls();
-    updateUIForEngine();
-    updateDateTimeDisplay();
-
-    // 9. ADD MAP EVENT LISTENERS
-    simMap.on('moveend resize zoomend', function() {
-        updateCanvasOverlay();
-        updateDeckGLView();
-    });
-
-    // 10. START ANIMATION
-    animate();
-
-    console.log('✅ Hybrid Leaflet + deck.gl initialized');
-    return true;
 }
-
 
 async function initDeckGL() {
     // Check if deck.gl is loaded
@@ -129,12 +144,12 @@ async function initDeckGL() {
         }
 
         // Set canvas size
-        const width = window.innerWidth - 360; // Account for controls panel
+        const width = window.innerWidth - 360;
         const height = window.innerHeight;
         canvas.width = width;
         canvas.height = height;
 
-        // Initial view state (centered on Pacific)
+        // Initial view state
         const initialViewState = {
             longitude: 165.0,
             latitude: 25.0,
@@ -143,16 +158,15 @@ async function initDeckGL() {
             bearing: 0
         };
 
-        // Create deck.gl instance with v8 API
+        // Create deck.gl instance
         deckgl = new deck.Deck({
             canvas: canvas,
             initialViewState: initialViewState,
-            controller: false, // Let Leaflet handle interaction
+            controller: false,
             layers: [],
-            // For v8, we can use this simpler approach
             parameters: {
                 blend: true,
-                blendFunc: [0x0302, 0x0303] // SRC_ALPHA, ONE_MINUS_SRC_ALPHA as hex values
+                blendFunc: [0x0302, 0x0303]
             }
         });
 
@@ -162,27 +176,23 @@ async function initDeckGL() {
         // Handle window resize
         window.addEventListener('resize', handleResize);
 
-        console.log('✅ deck.gl v8.9.35 initialized successfully');
-
-        // Show heatmap control panel
+        console.log('✅ deck.gl initialized successfully');
         document.getElementById('heatmap-control').style.display = 'block';
 
     } catch (error) {
         console.error('Failed to initialize deck.gl:', error);
         console.warn('Running in Leaflet-only mode');
-        // Optional: show a subtle warning but don't break the app
-        showDataWarning('WebGL heatmap not available. Using Leaflet visualization only.');
+        showDataWarning('WebGL heatmap not available. Using particles only.');
     }
 }
+
 function updateDeckGLView() {
     if (!deckgl || !simMap) return;
 
     const center = simMap.getCenter();
     const zoom = simMap.getZoom();
-    const bounds = simMap.getBounds();
 
-    // Convert Leaflet zoom to deck.gl zoom (different scales)
-    // deck.gl zoom is approximately Leaflet zoom - 1
+    // Convert Leaflet zoom to deck.gl zoom
     const deckZoom = Math.max(0, zoom - 1);
 
     // Update deck.gl view state
@@ -213,9 +223,13 @@ function handleResize() {
 
     updateDeckGLView();
 }
+
 function createDensityGrid(particles, gridSize = 0.5) {
     const grid = {};
-    const totalMass = particles.reduce((sum, p) => sum + p.mass, 0);
+
+    if (!particles || particles.length === 0) {
+        return [];
+    }
 
     particles.forEach(p => {
         const lon = engine.FUKUSHIMA_LON + (p.x / engine.LON_SCALE);
@@ -238,7 +252,7 @@ function createDensityGrid(particles, gridSize = 0.5) {
         grid[key].count++;
     });
 
-    // Convert to array and calculate DENSITY (mass/area)
+    // Convert to array
     const data = Object.values(grid);
 
     if (data.length === 0) return [];
@@ -250,16 +264,18 @@ function createDensityGrid(particles, gridSize = 0.5) {
         cell.density = (cell.mass / cellArea) * 1000;
     });
 
-    // Normalize for visualization (0-1 range)
+    // Normalize for visualization
     const maxDensity = Math.max(...data.map(d => d.density));
-    data.forEach(cell => {
-        cell.normalizedDensity = cell.density / maxDensity;
-    });
+    if (maxDensity > 0) {
+        data.forEach(cell => {
+            cell.normalizedDensity = cell.density / maxDensity;
+        });
+    }
 
     console.log(`📍 Density grid: ${data.length} cells, Max density=${maxDensity.toExponential(2)}`);
-
     return data;
 }
+
 function updateDeckGLHeatmap(particles) {
     if (!deckgl || !showHeatmap || particles.length === 0) return;
 
@@ -267,81 +283,66 @@ function updateDeckGLHeatmap(particles) {
     if (now - lastHeatmapUpdate < HEATMAP_UPDATE_INTERVAL) return;
     lastHeatmapUpdate = now;
 
-    // CRITICAL: Create a density grid first
-    const gridData = createDensityGrid(particles, 0.5); // 0.5° grid
+    // Create density grid
+    const gridData = createDensityGrid(particles, heatmapParams.gridSize);
+    if (gridData.length === 0) return;
 
     // Convert to heatmap points
-    const heatmapData = gridData.map(cell => {
-        return {
-            position: cell.position,
-            weight: cell.density // Use normalized density
-        };
-    });
+    const heatmapData = gridData.map(cell => ({
+        position: cell.position,
+        weight: cell.density
+    }));
 
-    if (heatmapData.length === 0) return;
-
-    // Calculate stats for debugging
+    // Calculate stats
     const weights = heatmapData.map(d => d.weight);
     const maxWeight = Math.max(...weights);
     const avgWeight = weights.reduce((a, b) => a + b) / weights.length;
 
     console.log(`📊 Heatmap stats: Max=${maxWeight.toFixed(4)}, Avg=${avgWeight.toFixed(4)}, Cells=${heatmapData.length}`);
 
-    heatmapLayer = new deck.HeatmapLayer({
-        id: 'fukushima-heatmap',
-        data: heatmapData,
-        getPosition: d => d.position,
-        getWeight: d => {
-            // LOG SCALE: Emphasize concentration differences
-            let weight = d.weight;
+    try {
+        heatmapLayer = new deck.HeatmapLayer({
+            id: 'fukushima-heatmap',
+            data: heatmapData,
+            getPosition: d => d.position,
+            getWeight: d => {
+                let weight = d.weight;
+                if (heatmapParams.useLogScale) {
+                    weight = Math.log10(1 + weight * 100);
+                }
+                return weight * heatmapParams.intensity * 10;
+            },
+            colorRange: [
+                [13, 8, 135, 0],
+                [40, 60, 190, 50],
+                [23, 154, 176, 100],
+                [13, 188, 121, 150],
+                [62, 218, 79, 200],
+                [130, 226, 74, 220],
+                [192, 226, 70, 235],
+                [243, 210, 65, 245],
+                [251, 164, 57, 250],
+                [241, 99, 55, 255],
+                [231, 29, 43, 255],
+                [190, 0, 38, 255]
+            ],
+            radiusPixels: heatmapParams.radiusPixels,
+            intensity: 5.0,
+            threshold: 0.01,
+            colorDomain: [0, 10],
+            aggregation: 'SUM'
+        });
 
-            if (heatmapParams.useLogScale) {
-                // log10(1 + weight) compresses high values
-                weight = Math.log10(1 + weight * 100);
-            }
-
-            return weight * heatmapParams.intensity * 10; // Multiply more!
-        },
-
-        // NOAA-like color scheme (from their paper)
-        colorRange: [
-            [13, 8, 135, 0],     // Dark blue (transparent)
-            [40, 60, 190, 50],   // Blue
-            [23, 154, 176, 100], // Cyan-blue
-            [13, 188, 121, 150], // Blue-green
-            [62, 218, 79, 200],  // Green
-            [130, 226, 74, 220], // Yellow-green
-            [192, 226, 70, 235], // Yellow
-            [243, 210, 65, 245], // Orange-yellow
-            [251, 164, 57, 250], // Orange
-            [241, 99, 55, 255],  // Red-orange
-            [231, 29, 43, 255],  // Red
-            [190, 0, 38, 255]    // Dark red
-        ],
-
-        // Larger radius for smoother gradient
-        radiusPixels: heatmapParams.radiusPixels,
-
-        // CRITICAL: Manual intensity scaling
-        intensity: 5.0, // Fixed high value
-
-        // Lower threshold to show more
-        threshold: 0.01,
-
-        // Manual color domain (min, max) - prevents auto-scaling to uniform
-        colorDomain: [0, 10], // Adjust based on your data
-
-        // Aggregation mode
-        aggregation: 'SUM'
-    });
-
-    deckgl.setProps({
-        layers: [heatmapLayer]
-    });
+        deckgl.setProps({
+            layers: [heatmapLayer]
+        });
+    } catch (error) {
+        console.error('Failed to create heatmap layer:', error);
+    }
 }
+
 function clearDeckGLHeatmap() {
     if (!deckgl) return;
-
     deckgl.setProps({
         layers: []
     });
@@ -350,7 +351,7 @@ function clearDeckGLHeatmap() {
 // ==================== HEATMAP CONTROLS ====================
 
 function setupHeatmapControls() {
-    // Main toggle (in controls panel)
+    // Main toggle
     const heatmapToggleMain = document.getElementById('heatmapToggleMain');
     if (heatmapToggleMain) {
         heatmapToggleMain.checked = showHeatmap;
@@ -395,82 +396,53 @@ function setupHeatmapControls() {
         });
     }
 
-    // Add a log scale toggle
-    const heatmapSection = document.querySelector('.parameter-section');
-    if (heatmapSection) {
-        const logScaleHTML = `
-            <div class="toggle-container" style="margin-top: 10px;">
-                <label>Logarithmic Scale</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="logScaleToggle" checked>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-        `;
-
-        // Insert after radius slider
-        const radiusSlider = document.getElementById('radiusSlider');
-        if (radiusSlider) {
-            radiusSlider.closest('.heatmap-slider').insertAdjacentHTML('afterend', logScaleHTML);
-
-            // Add event listener
-            setTimeout(() => {
-                const logToggle = document.getElementById('logScaleToggle');
-                if (logToggle) {
-                    logToggle.addEventListener('change', (e) => {
-                        heatmapParams.useLogScale = e.target.checked;
-                    });
-                }
-            }, 100);
+    // Log scale toggle
+    setTimeout(() => {
+        const logToggle = document.getElementById('logScaleToggle');
+        if (logToggle) {
+            logToggle.checked = heatmapParams.useLogScale;
+            logToggle.addEventListener('change', (e) => {
+                heatmapParams.useLogScale = e.target.checked;
+            });
         }
-    }
+    }, 100);
 }
 
 function toggleHeatmap() {
+    const deckCanvas = document.getElementById('deckgl-overlay');
+    if (!deckCanvas) return;
+
     if (showHeatmap) {
-        // Heatmap ON: Hide deck.gl canvas, clear heatmap
-        document.getElementById('deckgl-overlay').style.opacity = 1;
-
-        // Force particle layer to redraw (which will draw nothing)
-        if (particleCanvas && engine) {
-            const particles = engine.getActiveParticles();
-            particleCanvas.updateParticles(particles); // This now respects showHeatmap
-        }
-
+        // Heatmap ON
+        deckCanvas.style.opacity = '1';
         console.log('🔥 Heatmap ON - Particles hidden');
     } else {
-        // Heatmap OFF: Show particles, hide heatmap
-        document.getElementById('deckgl-overlay').style.opacity = 0;
+        // Heatmap OFF
+        deckCanvas.style.opacity = '0';
         clearDeckGLHeatmap();
-
-        // Force particle layer to redraw (which will draw particles)
-        if (particleCanvas && engine) {
-            const particles = engine.getActiveParticles();
-            particleCanvas.updateParticles(particles);
-        }
-
         console.log('🌀 Heatmap OFF - Particles visible');
     }
+
+    // Update particle display
+    if (particleCanvas && engine) {
+        const particles = engine.getActiveParticles();
+        particleCanvas.updateParticles(particles);
+    }
 }
-// ==================== LEAFLET FUNCTIONS (mostly unchanged) ====================
+
+// ==================== LEAFLET FUNCTIONS ====================
 
 function createCanvasOverlay() {
     const particleLayer = L.layerGroup();
     window.particleMarkers = [];
 
     particleLayer.updateParticles = function(particles) {
-        // CRITICAL: Clear ALL markers first
+        // Clear existing markers
         this.clearLayers();
         window.particleMarkers = [];
 
-        // If heatmap is ON, don't draw ANY particles
-        if (showHeatmap) {
-            console.log('Heatmap on: No particles drawn');
-            return; // Exit early - no particles!
-        }
-
-        if (!engine) {
-            console.error('❌ Engine not initialized');
+        // If heatmap is ON, don't draw particles
+        if (showHeatmap || !engine) {
             return;
         }
 
@@ -482,9 +454,7 @@ function createCanvasOverlay() {
             const lon = engine.FUKUSHIMA_LON + (p.x / engine.LON_SCALE);
             const lat = engine.FUKUSHIMA_LAT + (p.y / engine.LAT_SCALE);
 
-            // SIMPLE: All particles are blue for Cs137
-            const color = '#4fc3f7'; // Blue color
-
+            const color = '#4fc3f7';
             const marker = L.circleMarker([lat, lon], {
                 radius: Math.max(1, Math.sqrt(p.mass) * 2),
                 color: color,
@@ -494,7 +464,6 @@ function createCanvasOverlay() {
                 opacity: 0.8
             });
 
-            // FIX: Update popup content for Cs-137 only
             marker.bindPopup(`
                 <div style="font-family: 'Segoe UI', sans-serif; font-size: 12px;">
                     <strong>Cesium-137 Particle</strong><br>
@@ -507,7 +476,7 @@ function createCanvasOverlay() {
 
             marker.addTo(this);
             window.particleMarkers.push(marker);
-        } // <-- THIS WAS MISSING!
+        }
 
         console.log(`✅ Drew ${limit} particles (heatmap: ${showHeatmap})`);
     };
@@ -515,35 +484,34 @@ function createCanvasOverlay() {
     particleLayer.clearAllParticles = function() {
         this.clearLayers();
         window.particleMarkers = [];
-
-        // Also clear deck.gl heatmap
         clearDeckGLHeatmap();
-
         console.log('🧹 Cleared ALL visualization layers');
     };
 
     return particleLayer;
 }
+
 // ==================== ANIMATION LOOP ====================
 
 function animate() {
     if (engine && engine.isRunning) {
+        // Update simulation
         engine.update();
 
         // Get current particles
         const particles = engine.getActiveParticles();
 
-        // Always update heatmap if it's enabled
+        // Update heatmap if enabled
         if (showHeatmap) {
             updateDeckGLHeatmap(particles);
         }
 
-        // Update particles on map (respects showHeatmap flag)
+        // Update particles on map
         if (particleCanvas && particleCanvas.updateParticles) {
             particleCanvas.updateParticles(particles);
         }
 
-        // Update date/time and stats
+        // Update UI
         updateDateTimeDisplay();
         updateStatsDisplay();
         updateUIForEngine();
@@ -556,7 +524,7 @@ function animate() {
 function updateDateTimeDisplay() {
     if (!engine) return;
 
-    // Update from engine if available
+    // Update from engine
     if (engine.getFormattedTime) {
         const time = engine.getFormattedTime();
         currentSimulationDate = new Date(
@@ -565,7 +533,6 @@ function updateDateTimeDisplay() {
         );
         simulationDay = engine.stats.simulationDays || 0;
     } else {
-        // Manual calculation
         simulationDay = engine.stats.simulationDays || 0;
         currentSimulationDate = new Date(
             simulationStartDate.getTime() + (simulationDay * 86400000)
@@ -583,7 +550,8 @@ function updateDateTimeDisplay() {
             month: 'long',
             day: 'numeric'
         });
-        dateDisplay.querySelector('.date-label').textContent = dateStr;
+        const dateLabel = dateDisplay.querySelector('.date-label') || dateDisplay;
+        dateLabel.textContent = dateStr;
     }
 
     if (timeLabel) {
@@ -600,7 +568,43 @@ function updateDateTimeDisplay() {
         simDayDisplay.textContent = Math.floor(simulationDay);
     }
 }
+function setupDiffusionControls() {
+    // Add to your HTML:
+    // <div class="slider-container">
+    //     <label>Diffusion: <span id="diffusionValue">1.0</span>x</label>
+    //     <input type="range" id="diffusionSlider" min="0.0" max="2.0" step="0.1" value="1.0">
+    // </div>
+    // <div class="toggle-container">
+    //     <label>Enable Diffusion</label>
+    //     <label class="toggle-switch">
+    //         <input type="checkbox" id="diffusionToggle" checked>
+    //         <span class="toggle-slider"></span>
+    //     </label>
+    // </div>
 
+    const diffusionSlider = document.getElementById('diffusionSlider');
+    const diffusionToggle = document.getElementById('diffusionToggle');
+
+    if (diffusionSlider) {
+        diffusionSlider.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            document.getElementById('diffusionValue').textContent = value.toFixed(1);
+
+            if (engine) {
+                engine.setParameter('diffusionStrength', value);
+            }
+        });
+    }
+
+    if (diffusionToggle) {
+        diffusionToggle.addEventListener('change', (e) => {
+            if (engine) {
+                engine.setParameter('enableDiffusion', e.target.checked);
+                console.log(`Diffusion ${e.target.checked ? 'ENABLED' : 'DISABLED'}`);
+            }
+        });
+    }
+}
 function updateStatsDisplay() {
     if (!engine) return;
 
@@ -609,7 +613,8 @@ function updateStatsDisplay() {
     const decayedCount = document.getElementById('decayedCount');
 
     if (particleCount) {
-        particleCount.textContent = engine.getActiveParticles().length.toLocaleString();
+        const active = engine.getActiveParticles().length;
+        particleCount.textContent = active.toLocaleString();
     }
 
     if (totalReleased) {
@@ -622,7 +627,6 @@ function updateStatsDisplay() {
 }
 
 function addMapControls(map) {
-    // Scale control
     L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
 }
 
@@ -636,71 +640,59 @@ function setupControls() {
     console.log('Setting up controls...');
 
     // Get controls
-    const kuroshioSlider = document.getElementById('kuroshioSlider');
     const diffusionSlider = document.getElementById('diffusionSlider');
     const speedSlider = document.getElementById('speedSlider');
     const startBtn = document.getElementById('startBtn');
     const resetBtn = document.getElementById('resetBtn');
 
-    // Remove references to deleted controls
-    // const interpolationToggle = document.getElementById('interpolationToggle'); // REMOVED
-    // const decayToggle = document.getElementById('decayToggle'); // REMOVED
-    // const ekeToggle = document.getElementById('ekeToggle'); // REMOVED
-    // const timescaleSlider = document.getElementById('timescaleSlider'); // REMOVED
-
-    // Helper function to update engine parameter
-    function updateEngineParam(paramName, value, displayId = null) {
-        if (!engine || !engine.params) {
-            console.error('Engine not initialized');
-            return;
-        }
-
-        if (engine.params[paramName] !== undefined) {
-            engine.params[paramName] = value;
-
-            if (displayId) {
-                const display = document.getElementById(displayId);
-                if (display) {
-                    display.textContent = value.toFixed(1);
-                }
-            }
-
-            console.log(`Updated ${paramName} = ${value}`);
-        }
-    }
-
-    // Add event listeners
-    if (kuroshioSlider) {
-        kuroshioSlider.addEventListener('input', (e) => {
-            updateEngineParam('kuroshioMultiplier', parseFloat(e.target.value), 'kuroshioValue');
-        });
-    }
-
+    // Diffusion slider - simple control
     if (diffusionSlider) {
         diffusionSlider.addEventListener('input', (e) => {
-            updateEngineParam('diffusivityScale', parseFloat(e.target.value), 'diffusionValue');
+            const value = parseFloat(e.target.value);
+
+            // Update display
+            const diffusionValue = document.getElementById('diffusionValue');
+            diffusionValue.textContent = value.toFixed(1);
+
+            // Color code for visual feedback
+            if (value === 0) {
+                diffusionValue.style.color = '#ff6b6b';
+                diffusionValue.textContent = '0 (Pure HYCOM)';
+            } else {
+                diffusionValue.style.color = '#4fc3f7';
+            }
+
+            // Update engine
+            if (engine && engine.setParameter) {
+                engine.setParameter('diffusivityScale', value);
+                console.log(`Diffusion scale: ${value}x`);
+            }
         });
     }
 
+    // Speed slider
     if (speedSlider) {
         speedSlider.addEventListener('input', (e) => {
-            updateEngineParam('simulationSpeed', parseFloat(e.target.value), 'speedValue');
+            const value = parseFloat(e.target.value);
+            document.getElementById('speedValue').textContent = value.toFixed(1);
+
+            if (engine && engine.setParameter) {
+                engine.setParameter('simulationSpeed', value);
+            }
         });
     }
 
-    // Start/Stop button - TOGGLE functionality
+    // Start/Stop button
     if (startBtn) {
         startBtn.addEventListener('click', () => {
             if (!engine) return;
 
             if (!engine.isRunning) {
-                // Start simulation
                 engine.startSimulation();
                 startBtn.textContent = '⏹️ Stop Simulation';
                 startBtn.style.background = 'linear-gradient(135deg, #ff6b6b, #ff4757)';
                 console.log('🚀 Simulation started');
             } else {
-                // Stop simulation
                 engine.stopSimulation();
                 startBtn.textContent = '▶ Start Simulation';
                 startBtn.style.background = 'linear-gradient(135deg, #4fc3f7, #2979ff)';
@@ -713,16 +705,28 @@ function setupControls() {
     if (resetBtn) {
         resetBtn.addEventListener('click', () => {
             if (engine) {
-                // Reset everything
                 if (particleCanvas && particleCanvas.clearAllParticles) {
                     particleCanvas.clearAllParticles();
                 }
                 engine.resetSimulation();
 
-                // Reset button to "Start"
+                // Reset UI
                 if (startBtn) {
                     startBtn.textContent = '▶ Start Simulation';
                     startBtn.style.background = 'linear-gradient(135deg, #4fc3f7, #2979ff)';
+                }
+
+                // Reset sliders to defaults
+                if (diffusionSlider) {
+                    diffusionSlider.value = 1.0;
+                    const diffusionValue = document.getElementById('diffusionValue');
+                    diffusionValue.textContent = '1.0';
+                    diffusionValue.style.color = '#4fc3f7';
+                }
+
+                if (speedSlider) {
+                    speedSlider.value = 1.0;
+                    document.getElementById('speedValue').textContent = '1.0';
                 }
 
                 updateUIForEngine();
@@ -737,37 +741,44 @@ function setupControls() {
 function updateUIForEngine() {
     if (!engine) return;
 
-
     const params = engine.params;
 
     // Update sliders
-    const kuroshioSlider = document.getElementById('kuroshioSlider');
     const diffusionSlider = document.getElementById('diffusionSlider');
     const speedSlider = document.getElementById('speedSlider');
 
+    // Hide Kuroshio controls
+    const kuroshioSlider = document.getElementById('kuroshioSlider');
     if (kuroshioSlider) {
-        kuroshioSlider.value = params.kuroshioMultiplier;
-        document.getElementById('kuroshioValue').textContent = params.kuroshioMultiplier.toFixed(1);
+        kuroshioSlider.style.display = 'none';
+    }
+    const kuroshioLabel = document.querySelector('label[for="kuroshioSlider"]');
+    if (kuroshioLabel) {
+        kuroshioLabel.style.display = 'none';
     }
 
+    // Update diffusion slider
     if (diffusionSlider) {
         diffusionSlider.value = params.diffusivityScale;
-        document.getElementById('diffusionValue').textContent = params.diffusivityScale.toFixed(1);
+        const diffusionValue = document.getElementById('diffusionValue');
+        diffusionValue.textContent = params.diffusivityScale.toFixed(1);
+
+        // Color code
+        if (params.diffusivityScale === 0) {
+            diffusionValue.style.color = '#ff6b6b';
+            diffusionValue.textContent = '0 (Pure HYCOM)';
+        } else {
+            diffusionValue.style.color = '#4fc3f7';
+        }
     }
 
+    // Update speed slider
     if (speedSlider) {
-        // CRITICAL FIX: Always sync slider with actual speed
         speedSlider.value = params.simulationSpeed;
         document.getElementById('speedValue').textContent = params.simulationSpeed.toFixed(1);
     }
-    // Update data source display
-    const dataSourceElement = document.getElementById('dataSource');
-    if (dataSourceElement) {
-        dataSourceElement.textContent = `OSCAR 2011 + AVISO EKE ×${params.diffusivityScale.toFixed(1)}`;
-        dataSourceElement.style.color = '#4fc3f7';
-    }
 
-    // Update start/stop button based on engine state
+    // Update start/stop button
     const startBtn = document.getElementById('startBtn');
     if (startBtn) {
         if (engine.isRunning) {
@@ -781,18 +792,23 @@ function updateUIForEngine() {
 
     updateStatsDisplay();
 }
-function updateDataSourceDisplay() {  // FIXED: Was "unction" instead of "function"
+function updateDataSourceDisplay() {
     if (!engine) return;
 
     const sourceElem = document.getElementById('dataSource');
     const particleElem = document.getElementById('particleCount');
 
     if (sourceElem) {
-        if (engine.params.useEKEData) {
-            sourceElem.textContent = `AVISO EKE ×${engine.params.diffusivityScale.toFixed(1)}`;
+        // Get HYCOM info
+        const info = engine.getDataSourceInfo ? engine.getDataSourceInfo() : { source: 'Unknown' };
+
+        if (info.source === 'HYCOM') {
+            const date = new Date(info.year, info.month - 1, 1);
+            const monthName = date.toLocaleDateString('en-US', { month: 'long' });
+            sourceElem.textContent = `HYCOM ${monthName} ${info.year}`;
             sourceElem.style.color = '#4fc3f7';
         } else {
-            sourceElem.textContent = 'Parameterized Diffusion';
+            sourceElem.textContent = info.source;
             sourceElem.style.color = '#ff6b6b';
         }
     }
@@ -806,7 +822,7 @@ function updateDataSourceDisplay() {  // FIXED: Was "unction" instead of "functi
 
 function showDataWarning(message) {
     const warningElement = document.getElementById('dataWarning') || createWarningElement();
-    warningElement.innerHTML = `⚠️ ${message} <br><small>Simulation will still work with parameterized values</small>`;
+    warningElement.innerHTML = `⚠️ ${message}`;
     warningElement.style.display = 'block';
 
     setTimeout(() => {
@@ -908,7 +924,7 @@ function createStatusElement() {
             <div id="loadingBar" style="width: 0%; height: 100%; background: #4fc3f7; border-radius: 2px; transition: width 0.3s;"></div>
         </div>
         <div style="margin-top: 30px; font-size: 14px; color: #b0bec5;">
-            Using OSCAR 2011 current data and AVISO EKE
+            Using HYCOM 2011-2013 currents and AVISO EKE
         </div>
     `;
 
@@ -948,6 +964,7 @@ function hideLoadingStatus() {
     }
 }
 
+// Start application
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
 } else {

@@ -479,6 +479,7 @@
 
     <!-- CONTROLS PANEL - NOW ON LEFT -->
     <div id="controls">
+
         <!-- HEADER WITH DATE/TIME -->
         <div class="header-section">
             <h3>🌊 Fukushima Plume Simulator</h3>
@@ -492,7 +493,11 @@
                 </div>
             </div>
         </div>
-
+        <div class="stats-row">
+            <span>Active: <span id="particleCount">0</span></span>
+            <span>Released: <span id="totalReleased">0</span></span>  <!-- Add this -->
+            <span>Decayed: <span id="decayedCount">0</span></span>
+        </div>
 
         <!-- SIMULATION CONTROLS -->
         <div class="parameter-section">
@@ -504,11 +509,13 @@
                 <div class="note">Boost or weaken the Kuroshio current</div>
             </div>
 
+            <!-- Update the diffusion slider label -->
             <div class="slider-container">
-                <label>Diffusion Scale: <span id="diffusionValue">1.0</span>x</label>
-                <input type="range" id="diffusionSlider" min="0.1" max="5.0" step="0.1" value="1.0">
-                <div class="note">Multiply diffusivity by this factor</div>
+                <label>EKE Scale: <span id="diffusionValue">1.0</span>x</label>
+                <input type="range" id="diffusionSlider" min="0.0" max="5.0" step="0.1" value="1.0">
+                <div class="note">Multiplies EKE diffusion values (0 = no diffusion)</div>
             </div>
+
 
             <h4>Simulation Control</h4>
 
@@ -548,7 +555,8 @@
     <!-- ADD THIS for HeatmapLayer support: -->
     <script src="https://unpkg.com/@deck.gl/aggregation-layers@8.9.35/dist.min.js"></script>
     <script src="https://api.mapbox.com/mapbox-gl-js/v2.8.1/mapbox-gl.js"></script>
-
+    <script src="hycomLoader.js"></script>
+    <script src="streamingEKELoader.js"></script>
     <script src="particleEngine.js"></script>
     <script src="app.js"></script>
 </body>
