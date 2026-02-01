@@ -13,3 +13,9 @@ __pycache__/
 # Node/JS  
 node_modules/
 web/eke_ultra_optimized/
+web/eke_ultra_optimized/
+web/data/cmems_EKE_data/
+web/data/currents_bin/
+web/data/hycom_data/
+web/data/eke_hycom_grid/
+web/data/current_heatmaps/
