@@ -1,30 +1,31 @@
-// streamingHYCOMLoader.js - MAXIMUM OPTIMIZATION
-console.log('=== Streaming HYCOM Loader (Optimized) ===');
+// streamingHYCOMLoader_DAILY.js - DAILY STREAMING
+console.log('=== Streaming HYCOM Loader (Daily Optimized) ===');
 
-class StreamingHYCOMLoader {
+class StreamingHYCOMLoader_DAILY {
     constructor() {
         this.metadata = null;
         this.gridInfo = null;
-        this.loadedMonths = new Map(); // monthIndex -> {lonArray, latArray, uArray, vArray}
-        this.cache = new Map();        // Still useful for repeated lookups
-        this.activeMonth = null;
-        this.loadingPromises = new Map(); // Prevent duplicate month loads
+        this.loadedDays = new Map();        // dateKey -> {lonArray, latArray, uArray, vArray}
+        this.cache = new Map();             // Still useful for repeated lookups
+        this.activeDayKey = null;
+        this.loadingPromises = new Map();   // Prevent duplicate day loads
+        this.baseDate = new Date('2011-03-01T00:00:00Z'); // Base date from your conversion
 
-        console.log("🌊 Streaming HYCOM Loader initialized (Optimized)");
+        console.log("🌊 Daily HYCOM Loader initialized");
     }
 
     // ==================== INITIALIZATION ====================
 
     async init() {
-        console.log('🔄 Initializing optimized loader...');
+        console.log('🔄 Initializing daily loader...');
         try {
-            // 1. Load metadata
-            await this.loadMetadata();
+            // 1. Load DAILY metadata
+            await this.loadDailyMetadata();
 
-            // 2. Pre-load current month immediately
-            await this.loadMonth(0);
+            // 2. Pre-load first day immediately
+            await this.loadDayByOffset(0);
 
-            console.log('✅ Optimized loader ready');
+            console.log('✅ Daily loader ready');
             return true;
         } catch (error) {
             console.error('❌ Initialization failed:', error);
@@ -32,48 +33,72 @@ class StreamingHYCOMLoader {
         }
     }
 
-    async loadMetadata() {
+    async loadDailyMetadata() {
         try {
-            const response = await fetch('data/currents_bin/currents_metadata.json');
+            const response = await fetch('data/currents_daily_bin/currents_daily_metadata.json');
             this.metadata = await response.json();
-            console.log(`✅ Metadata: ${this.metadata.months.length} months`);
+            console.log(`✅ Daily metadata: ${this.metadata.days.length} days`);
+
+            // Index days by offset for faster lookup
+            this.daysByOffset = {};
+            this.daysByDate = {};
+
+            this.metadata.days.forEach(day => {
+                this.daysByOffset[day.day_offset] = day;
+                const dateKey = `${day.year}-${day.month.toString().padStart(2, '0')}-${day.day.toString().padStart(2, '0')}`;
+                this.daysByDate[dateKey] = day;
+            });
+
             return this.metadata;
         } catch (error) {
-            console.error('❌ Metadata error:', error);
+            console.error('❌ Daily metadata error:', error);
             throw error;
         }
     }
 
-    // ==================== MONTH LOADING ====================
+    // ==================== DAY LOADING ====================
 
-    async loadMonth(monthIndex) {
+    async loadDayByOffset(dayOffset) {
+        const dayData = this.daysByOffset[dayOffset];
+        if (!dayData) {
+            console.error(`❌ No data for day offset ${dayOffset}`);
+            return null;
+        }
+
+        return this._loadDayByDate(dayData.year, dayData.month, dayData.day);
+    }
+
+    async loadDayByDate(year, month, day) {
+        const dateKey = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+
         // If already loading, return the promise
-        if (this.loadingPromises.has(monthIndex)) {
-            return this.loadingPromises.get(monthIndex);
+        if (this.loadingPromises.has(dateKey)) {
+            return this.loadingPromises.get(dateKey);
         }
 
         // If already loaded, return immediately
-        if (this.loadedMonths.has(monthIndex)) {
-            return this.loadedMonths.get(monthIndex);
+        if (this.loadedDays.has(dateKey)) {
+            return this.loadedDays.get(dateKey);
         }
 
-        console.log(`📥 Loading month ${monthIndex}...`);
-        const loadPromise = this._loadMonthData(monthIndex);
-        this.loadingPromises.set(monthIndex, loadPromise);
+        console.log(`📥 Loading day ${dateKey}...`);
+        const loadPromise = this._loadDayByDate(year, month, day);
+        this.loadingPromises.set(dateKey, loadPromise);
 
         try {
             const result = await loadPromise;
-            this.loadedMonths.set(monthIndex, result);
-            this.activeMonth = monthIndex;
+            this.loadedDays.set(dateKey, result);
+            this.activeDayKey = dateKey;
             return result;
         } finally {
-            this.loadingPromises.delete(monthIndex);
+            this.loadingPromises.delete(dateKey);
         }
     }
 
-    async _loadMonthData(monthIndex) {
-        const monthData = this.metadata.months[monthIndex];
-        const filePath = `data/currents_bin/${monthData.file}`;
+    async _loadDayByDate(year, month, day) {
+        const dateKey = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+        const fileName = `currents_${year}_${month.toString().padStart(2, '0')}_${day.toString().padStart(2, '0')}.bin`;
+        const filePath = `data/currents_daily_bin/${fileName}`;
 
         try {
             const startTime = performance.now();
@@ -86,20 +111,23 @@ class StreamingHYCOMLoader {
             const arrayBuffer = await response.arrayBuffer();
             const loadTime = performance.now() - startTime;
 
-            // Parse the binary format (Version 2 with coordinates)
+            // Parse the binary format (Version 3 with day)
             const view = new DataView(arrayBuffer);
             const version = view.getInt32(0, true);
             const nLat = view.getInt32(4, true);
             const nLon = view.getInt32(8, true);
+            const fileYear = view.getInt32(12, true);
+            const fileMonth = view.getInt32(16, true);
+            const fileDay = view.getInt32(20, true);
             const totalCells = nLat * nLon;
 
-            console.log(`   Loaded ${(arrayBuffer.byteLength / (1024**2)).toFixed(1)}MB in ${loadTime.toFixed(0)}ms`);
+            console.log(`   Loaded ${dateKey}: ${(arrayBuffer.byteLength / (1024**2)).toFixed(1)}MB in ${loadTime.toFixed(0)}ms`);
 
-            // Create Float32Array views DIRECTLY into the buffer (NO copying!)
-            const headerSize = 20; // 5 ints = 20 bytes
+            // Create Float32Array views DIRECTLY into the buffer
+            const headerSize = 24; // 6 ints = 24 bytes for version 3
             const dataStart = headerSize;
 
-            const monthArrays = {
+            const dayArrays = {
                 lonArray: new Float32Array(arrayBuffer, dataStart, totalCells),
                 latArray: new Float32Array(arrayBuffer, dataStart + (totalCells * 4), totalCells),
                 uArray: new Float32Array(arrayBuffer, dataStart + (2 * totalCells * 4), totalCells),
@@ -107,6 +135,10 @@ class StreamingHYCOMLoader {
                 nLat,
                 nLon,
                 totalCells,
+                year: fileYear,
+                month: fileMonth,
+                day: fileDay,
+                dateKey,
                 arrayBuffer, // Keep reference to prevent GC
                 loadTime
             };
@@ -119,25 +151,110 @@ class StreamingHYCOMLoader {
                     totalCells,
                     bytesPerArray: totalCells * 4
                 };
-                this.buildSpatialIndex(monthArrays.lonArray, monthArrays.latArray, nLat, nLon);
+                this.buildSpatialIndex(dayArrays.lonArray, dayArrays.latArray, nLat, nLon);
             }
 
-            return monthArrays;
+            return dayArrays;
 
         } catch (error) {
-            console.error(`❌ Failed to load month ${monthIndex}:`, error);
+            console.error(`❌ Failed to load day ${dateKey}:`, error);
             throw error;
         }
     }
 
+    // ==================== DATE/DAY CONVERSION ====================
+
+    simulationDayToDate(simulationDay) {
+        // Convert simulation day to actual date
+        const date = new Date(this.baseDate.getTime() + simulationDay * 24 * 60 * 60 * 1000);
+        return {
+            year: date.getUTCFullYear(),
+            month: date.getUTCMonth() + 1,
+            day: date.getUTCDate(),
+            dateKey: date.toISOString().split('T')[0]
+        };
+    }
+
+    dateToSimulationDay(year, month, day) {
+        const targetDate = new Date(Date.UTC(year, month - 1, day));
+        const diffTime = targetDate - this.baseDate;
+        return Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    }
+
+    // ==================== CORE LOOKUP ====================
+
+    async getVelocityAt(lon, lat, simulationDay = 0) {
+        // Convert simulation day to date
+        const dateInfo = this.simulationDayToDate(simulationDay);
+
+        // Ensure day is loaded
+        const dayData = await this.loadDayByDate(dateInfo.year, dateInfo.month, dateInfo.day);
+
+        // Find closest grid cell
+        const cell = this.findNearestCell(lon, lat, dayData);
+
+        if (!cell) {
+            return { u: 0, v: 0, found: false };
+        }
+
+        // DIRECT array access
+        const u = dayData.uArray[cell.idx];
+        const v = dayData.vArray[cell.idx];
+        const isOcean = !isNaN(u) && !isNaN(v);
+
+        return {
+            u: isOcean ? u : 0,
+            v: isOcean ? v : 0,
+            found: isOcean,
+            cached: false,
+            gridCell: [cell.i, cell.j],
+            distance: cell.distance,
+            date: dateInfo.dateKey
+        };
+    }
+
+    async getVelocitiesAtMultiple(positions, simulationDay = 0) {
+        // Convert simulation day to date
+        const dateInfo = this.simulationDayToDate(simulationDay);
+
+        // Load day once
+        const dayData = await this.loadDayByDate(dateInfo.year, dateInfo.month, dateInfo.day);
+
+        const results = new Array(positions.length);
+
+        // DIRECT array access for all positions
+        for (let k = 0; k < positions.length; k++) {
+            const { lon, lat } = positions[k];
+            const cell = this.findNearestCell(lon, lat, dayData);
+
+            if (cell) {
+                const u = dayData.uArray[cell.idx];
+                const v = dayData.vArray[cell.idx];
+                const isOcean = !isNaN(u) && !isNaN(v);
+
+                results[k] = {
+                    u: isOcean ? u : 0,
+                    v: isOcean ? v : 0,
+                    found: isOcean,
+                    gridCell: [cell.i, cell.j],
+                    date: dateInfo.dateKey
+                };
+            } else {
+                results[k] = { u: 0, v: 0, found: false, date: dateInfo.dateKey };
+            }
+        }
+
+        return results;
+    }
+
+    // ==================== SPATIAL INDEX (SAME AS BEFORE) ====================
+
     buildSpatialIndex(lonArray, latArray, nLat, nLon) {
         console.log('🗺️ Building spatial index...');
 
-        // Simple 100x100 grid for O(1) lookups
         const GRID_SIZE = 100;
         this.spatialGrid = Array(GRID_SIZE).fill().map(() => Array(GRID_SIZE).fill([]));
 
-        // Calculate bounds
         let lonMin = Infinity, lonMax = -Infinity;
         let latMin = Infinity, latMax = -Infinity;
 
@@ -151,7 +268,7 @@ class StreamingHYCOMLoader {
 
         this.gridBounds = { lonMin, lonMax, latMin, latMax };
 
-        // Build index (sample every 10th point)
+        // Build index
         for (let i = 0; i < nLat; i += 10) {
             for (let j = 0; j < nLon; j += 10) {
                 const idx = i * nLon + j;
@@ -172,69 +289,10 @@ class StreamingHYCOMLoader {
         console.log(`   Spatial grid: ${GRID_SIZE}x${GRID_SIZE}`);
     }
 
-    // ==================== CORE LOOKUP (1000x FASTER) ====================
+    findNearestCell(lon, lat, dayData) {
+        const { nLat, nLon } = dayData;
+        const { lonArray, latArray } = dayData;
 
-    async getVelocityAt(lon, lat, monthIndex = 0) {
-        // Ensure month is loaded
-        const monthData = await this.loadMonth(monthIndex);
-
-        // Find closest grid cell (O(1) with spatial grid)
-        const cell = this.findNearestCell(lon, lat, monthData);
-
-        if (!cell) {
-            return { u: 0, v: 0, found: false };
-        }
-
-        // DIRECT array access - zero overhead
-        const u = monthData.uArray[cell.idx];
-        const v = monthData.vArray[cell.idx];
-        const isOcean = !isNaN(u) && !isNaN(v);
-
-        return {
-            u: isOcean ? u : 0,
-            v: isOcean ? v : 0,
-            found: isOcean,
-            cached: false, // Not using cache since arrays are in memory
-            gridCell: [cell.i, cell.j],
-            distance: cell.distance
-        };
-    }
-
-    async getVelocitiesAtMultiple(positions, monthIndex = 0) {
-        // Load month once
-        const monthData = await this.loadMonth(monthIndex);
-
-        const results = new Array(positions.length);
-
-        // DIRECT array access for all positions - fastest possible
-        for (let k = 0; k < positions.length; k++) {
-            const { lon, lat } = positions[k];
-            const cell = this.findNearestCell(lon, lat, monthData);
-
-            if (cell) {
-                const u = monthData.uArray[cell.idx];
-                const v = monthData.vArray[cell.idx];
-                const isOcean = !isNaN(u) && !isNaN(v);
-
-                results[k] = {
-                    u: isOcean ? u : 0,
-                    v: isOcean ? v : 0,
-                    found: isOcean,
-                    gridCell: [cell.i, cell.j]
-                };
-            } else {
-                results[k] = { u: 0, v: 0, found: false };
-            }
-        }
-
-        return results;
-    }
-
-    findNearestCell(lon, lat, monthData) {
-        const { nLat, nLon } = monthData;
-        const { lonArray, latArray } = monthData;
-
-        // Use spatial grid for initial guess
         const GRID_SIZE = 100;
         const { lonMin, lonMax, latMin, latMax } = this.gridBounds;
 
@@ -244,7 +302,6 @@ class StreamingHYCOMLoader {
         let bestDist = Infinity;
         let bestCell = null;
 
-        // Search in 3x3 neighborhood of spatial grid
         const searchRadius = 1;
         for (let dy = -searchRadius; dy <= searchRadius; dy++) {
             for (let dx = -searchRadius; dx <= searchRadius; dx++) {
@@ -274,88 +331,91 @@ class StreamingHYCOMLoader {
 
     // ==================== MEMORY MANAGEMENT ====================
 
-    setMaxMonthsInMemory(maxMonths = 3) {
-        if (this.loadedMonths.size > maxMonths) {
-            const keys = Array.from(this.loadedMonths.keys());
-            const toRemove = keys.slice(0, keys.length - maxMonths);
+    setMaxDaysInMemory(maxDays = 7) {
+        if (this.loadedDays.size > maxDays) {
+            const keys = Array.from(this.loadedDays.keys());
+            const toRemove = keys.slice(0, keys.length - maxDays);
 
-            toRemove.forEach(monthIndex => {
-                if (monthIndex !== this.activeMonth) {
-                    this.loadedMonths.delete(monthIndex);
+            toRemove.forEach(dateKey => {
+                if (dateKey !== this.activeDayKey) {
+                    this.loadedDays.delete(dateKey);
                 }
             });
 
-            console.log(`🗑️ Kept ${maxMonths} months in memory`);
+            console.log(`🗑️ Kept ${maxDays} days in memory`);
         }
     }
 
-    unloadMonth(monthIndex) {
-        if (this.loadedMonths.has(monthIndex) && monthIndex !== this.activeMonth) {
-            this.loadedMonths.delete(monthIndex);
-            console.log(`🗑️ Unloaded month ${monthIndex}`);
+    unloadDay(dateKey) {
+        if (this.loadedDays.has(dateKey) && dateKey !== this.activeDayKey) {
+            this.loadedDays.delete(dateKey);
+            console.log(`🗑️ Unloaded day ${dateKey}`);
         }
     }
 
     // ==================== PRELOADING ====================
 
-    async preloadAdjacentMonths(centerMonthIndex) {
-        const monthsToPreload = [];
+    async preloadAdjacentDays(simulationDay) {
+        const daysToPreload = [];
 
-        // Preload current, previous, and next months
+        // Preload current, previous, and next days
         for (let offset = -1; offset <= 1; offset++) {
-            const monthIndex = centerMonthIndex + offset;
-            if (monthIndex >= 0 && monthIndex < this.metadata.months.length) {
-                monthsToPreload.push(monthIndex);
+            const targetDay = simulationDay + offset;
+            if (targetDay >= 0) {
+                daysToPreload.push(targetDay);
             }
         }
 
-        console.log(`🔍 Preloading months: ${monthsToPreload.join(', ')}`);
-        await Promise.all(monthsToPreload.map(idx => this.loadMonth(idx)));
+        console.log(`🔍 Preloading days: ${daysToPreload.join(', ')}`);
+        await Promise.all(daysToPreload.map(day => {
+            const dateInfo = this.simulationDayToDate(day);
+            return this.loadDayByDate(dateInfo.year, dateInfo.month, dateInfo.day);
+        }));
     }
 
     // ==================== STATS & INFO ====================
 
     getStats() {
         return {
-            loadedMonths: this.loadedMonths.size,
-            totalMonths: this.metadata?.months.length || 0,
+            loadedDays: this.loadedDays.size,
+            totalDays: this.metadata?.days.length || 0,
             gridSize: this.gridInfo ? `${this.gridInfo.nLat}x${this.gridInfo.nLon}` : 'N/A',
             memoryUsage: this.calculateMemoryUsage(),
-            activeMonth: this.activeMonth
+            activeDay: this.activeDayKey,
+            dateRange: this.metadata ? {
+                first: this.metadata.days[0].date_str,
+                last: this.metadata.days[this.metadata.days.length - 1].date_str
+            } : null
         };
     }
 
     calculateMemoryUsage() {
         let totalBytes = 0;
-        for (const monthData of this.loadedMonths.values()) {
-            totalBytes += monthData.arrayBuffer.byteLength;
+        for (const dayData of this.loadedDays.values()) {
+            totalBytes += dayData.arrayBuffer.byteLength;
         }
         return `${(totalBytes / (1024**2)).toFixed(1)}MB`;
     }
 
-    getCurrentMonthInfo() {
-        if (this.activeMonth === null || !this.metadata) return null;
+    getCurrentDayInfo() {
+        if (!this.activeDayKey || !this.metadata) return null;
 
-        const monthData = this.metadata.months[this.activeMonth];
         return {
-            year: monthData.year,
-            month: monthData.month,
-            monthName: monthData.month_name,
-            gridShape: monthData.grid_shape
+            date: this.activeDayKey,
+            daysLoaded: this.loadedDays.size,
+            memoryUsage: this.calculateMemoryUsage()
         };
     }
-    // Add to your hycomLoader.js file:
 
-    // ==================== LAND MASK METHODS ====================
+    // ==================== LAND MASK METHODS (UPDATED) ====================
 
-    async getLandMask(monthIndex = 0) {
-        // Ensure month is loaded
-        const monthData = await this.loadMonth(monthIndex);
+    async getLandMask(simulationDay = 0) {
+        const dateInfo = this.simulationDayToDate(simulationDay);
+        const dayData = await this.loadDayByDate(dateInfo.year, dateInfo.month, dateInfo.day);
 
-        const { nLat, nLon, uArray } = monthData;
+        const { nLat, nLon, uArray } = dayData;
         const mask = new Array(nLat).fill().map(() => new Array(nLon).fill(false));
 
-        // Mark ocean cells (where u is not NaN)
         for (let i = 0; i < nLat; i++) {
             for (let j = 0; j < nLon; j++) {
                 const idx = i * nLon + j;
@@ -368,47 +428,48 @@ class StreamingHYCOMLoader {
             nLat,
             nLon,
             oceanCount: mask.flat().filter(cell => cell).length,
-            landCount: mask.flat().filter(cell => !cell).length
+            landCount: mask.flat().filter(cell => !cell).length,
+            date: dateInfo.dateKey
         };
     }
 
-    async isOcean(lon, lat, monthIndex = 0) {
+    async isOcean(lon, lat, simulationDay = 0) {
         try {
-            // Get nearest grid cell
-            const monthData = await this.loadMonth(monthIndex);
-            const cell = this.findNearestCell(lon, lat, monthData);
+            const dateInfo = this.simulationDayToDate(simulationDay);
+            const dayData = await this.loadDayByDate(dateInfo.year, dateInfo.month, dateInfo.day);
+            const cell = this.findNearestCell(lon, lat, dayData);
 
             if (!cell) return false;
 
-            // Check if it's ocean (u value is not NaN)
-            const u = monthData.uArray[cell.idx];
+            const u = dayData.uArray[cell.idx];
             return !isNaN(u);
 
         } catch (error) {
             console.warn('Land mask check failed:', error);
-            return false; // Default to land if check fails
+            return false;
         }
     }
 
-    async findNearestOceanCell(lon, lat, monthIndex = 0, maxSearchRadius = 10) {
-        const monthData = await this.loadMonth(monthIndex);
-        const { nLat, nLon, uArray } = monthData;
+    async findNearestOceanCell(lon, lat, simulationDay = 0, maxSearchRadius = 10) {
+        const dateInfo = this.simulationDayToDate(simulationDay);
+        const dayData = await this.loadDayByDate(dateInfo.year, dateInfo.month, dateInfo.day);
+        const { nLat, nLon, uArray, lonArray, latArray } = dayData;
 
-        // First try exact cell
-        const exactCell = this.findNearestCell(lon, lat, monthData);
+        const exactCell = this.findNearestCell(lon, lat, dayData);
         if (exactCell && !isNaN(uArray[exactCell.idx])) {
-            return exactCell;
+            return {
+                ...exactCell,
+                lon: lonArray[exactCell.idx],
+                lat: latArray[exactCell.idx]
+            };
         }
 
-        // If land, search neighboring cells
         const centerI = exactCell ? exactCell.i : Math.floor(nLat/2);
         const centerJ = exactCell ? exactCell.j : Math.floor(nLon/2);
 
-        // Spiral search outward
         for (let radius = 1; radius <= maxSearchRadius; radius++) {
             for (let di = -radius; di <= radius; di++) {
                 for (let dj = -radius; dj <= radius; dj++) {
-                    // Only check cells at current radius
                     if (Math.max(Math.abs(di), Math.abs(dj)) !== radius) continue;
 
                     const i = centerI + di;
@@ -419,8 +480,8 @@ class StreamingHYCOMLoader {
                         if (!isNaN(uArray[idx])) {
                             return {
                                 i, j, idx,
-                                lon: monthData.lonArray[idx],
-                                lat: monthData.latArray[idx]
+                                lon: lonArray[idx],
+                                lat: latArray[idx]
                             };
                         }
                     }
@@ -428,40 +489,23 @@ class StreamingHYCOMLoader {
             }
         }
 
-        return null; // No ocean cell found within search radius
-    }
-
-    // Helper method to push particle back to ocean
-    async pushToOcean(particle, monthIndex = 0) {
-        const lon = this.FUKUSHIMA_LON + (particle.x / this.LON_SCALE);
-        const lat = this.FUKUSHIMA_LAT + (particle.y / this.LAT_SCALE);
-
-        const oceanCell = await this.findNearestOceanCell(lon, lat, monthIndex);
-
-        if (oceanCell) {
-            // Convert back to km coordinates
-            particle.x = (oceanCell.lon - this.FUKUSHIMA_LON) * this.LON_SCALE;
-            particle.y = (oceanCell.lat - this.FUKUSHIMA_LAT) * this.LAT_SCALE;
-            return true;
-        }
-
-        return false;
+        return null;
     }
 }
 
 // Global instance
-window.StreamingHYCOMLoader = StreamingHYCOMLoader;
-window.streamingHycomLoader = new StreamingHYCOMLoader();
+window.StreamingHYCOMLoader_DAILY = StreamingHYCOMLoader_DAILY;
+window.streamingHycomLoaderDaily = new StreamingHYCOMLoader_DAILY();
 
 // Auto-initialize
 window.addEventListener('DOMContentLoaded', async () => {
-    console.log('🌊 Optimized HYCOM Loader initializing...');
+    console.log('🌊 Daily HYCOM Loader initializing...');
     try {
-        await window.streamingHycomLoader.init();
-        console.log('✅ Optimized HYCOM Loader ready (1000x faster)');
+        await window.streamingHycomLoaderDaily.init();
+        console.log('✅ Daily HYCOM Loader ready');
     } catch (error) {
-        console.error('❌ Optimized loader failed:', error);
+        console.error('❌ Daily loader failed:', error);
     }
 });
 
-console.log('=== Optimized HYCOM Loader loaded ===');
+console.log('=== Daily HYCOM Loader loaded ===');

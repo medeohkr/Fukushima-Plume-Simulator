@@ -6,12 +6,24 @@ class ParticleEngine {
         console.log('🚀 Creating ParticleEngine');
 
         // Loaders
-        this.hycomLoader = window.streamingHycomLoader;
+        this.hycomLoader = window.streamingHycomLoaderDaily;
         this.ekeLoader = window.streamingEkeLoader;
 
         // Fukushima location
         this.FUKUSHIMA_LON = 140.6;
         this.FUKUSHIMA_LAT = 37.4;
+                // ===== LEAFLET PROJECTION SETUP =====
+        this.crs = L.CRS.EPSG3857;  // Web Mercator projection
+        this.origin = this.crs.projection.origin;  // [0, 0] in pixel space
+        this.initialZoom = 0;
+
+        // Pre-calculate Fukushima in CRS coordinates (pixels)
+        this.fukushimaCRS = this.crs.latLngToPoint(
+            L.latLng(this.FUKUSHIMA_LAT, this.FUKUSHIMA_LON),
+            this.initialZoom
+        );
+
+        console.log(`🗺️  CRS setup: Fukushima at ${this.fukushimaCRS.x},${this.fukushimaCRS.y} pixels`);
 
         // Scale factors (km per degree at ~37°N)
         this.LON_SCALE = 88.8;   // km/degree longitude
@@ -67,6 +79,7 @@ class ParticleEngine {
             }
         ];
 
+
         // Activity scaling: 1 particle = 1 GBq
         this.activityToParticleScale = 0.001;
 
@@ -89,6 +102,11 @@ class ParticleEngine {
             totalDecayed: 0,
             simulationDays: 0,
             activeParticles: 0
+        };
+        this.stats.releaseDistribution = {
+            gaussian: true,
+            sigmaKm: 30,
+            center: [141.31, 37.42]
         };
 
         // Initialize particle pool
@@ -227,19 +245,65 @@ class ParticleEngine {
     releaseParticles(count) {
         let released = 0;
 
-        // Ocean-only release box (east of Fukushima)
-        const OCEAN_BOX = {
-            minLon: 141.21,  // Further east - in open ocean
-            maxLon: 141.41,
-            minLat: 37.4,
-            maxLat: 37.6,
+        // === ACCURATE RELEASE PARAMETERS ===
+        // Based on Rossi et al. (2013) "non-local source function"
+        const RELEASE_CENTER = {
+            lon: 141.31,  // Approx. Fukushima Daiichi location
+            lat: 37.42
         };
+
+        // Gaussian decay length-scale: 30 km (from Rossi paper)
+        // Convert to degrees (approx. at 37°N)
+        const SIGMA_LON = 30.0 / this.LON_SCALE;  // ~0.338 degrees
+        const SIGMA_LAT = 30.0 / this.LAT_SCALE;  // ~0.270 degrees
+
+        // Max spread: ±3 sigma covers 99.7% of particles
+        const MAX_SPREAD = 3.0;
 
         for (const p of this.particlePool) {
             if (!p.active && released < count) {
-                // Random position within ocean box
-                const lon = OCEAN_BOX.minLon + Math.random() * (OCEAN_BOX.maxLon - OCEAN_BOX.minLon);
-                const lat = OCEAN_BOX.minLat + Math.random() * (OCEAN_BOX.maxLat - OCEAN_BOX.minLat);
+                let lon, lat;
+                let attempts = 0;
+                const MAX_ATTEMPTS = 50; // Prevent infinite loop
+
+                // === GAUSSIAN DISTRIBUTION WITH OCEAN CHECK ===
+                do {
+                    // Generate random position from 2D Gaussian
+                    // Using Box-Muller transform for normal distribution
+                    const u1 = Math.random();
+                    const u2 = Math.random();
+                    const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+                    const z1 = Math.sqrt(-2.0 * Math.log(u1)) * Math.sin(2.0 * Math.PI * u2);
+
+                    lon = RELEASE_CENTER.lon + z0 * SIGMA_LON;
+                    lat = RELEASE_CENTER.lat + z1 * SIGMA_LAT;
+
+                    attempts++;
+
+                    // Constrain to reasonable bounds
+                    lon = Math.max(RELEASE_CENTER.lon - MAX_SPREAD * SIGMA_LON,
+                                 Math.min(RELEASE_CENTER.lon + MAX_SPREAD * SIGMA_LON, lon));
+                    lat = Math.max(RELEASE_CENTER.lat - MAX_SPREAD * SIGMA_LAT,
+                                 Math.min(RELEASE_CENTER.lat + MAX_SPREAD * SIGMA_LAT, lat));
+
+                } while (attempts < MAX_ATTEMPTS &&
+                        (lon < 141.0 || lon > 142.0 || lat < 37.0 || lat > 38.0)); // Broad geographic sanity check
+
+                // === OCEAN VALIDATION ===
+                // Check if position is actually in ocean
+                const isInOcean = this.isPositionInOcean(lon, lat);
+
+                if (!isInOcean) {
+                    // Fallback to original ocean box method
+                    const OCEAN_BOX = {
+                        minLon: 141.21,
+                        maxLon: 141.41,
+                        minLat: 37.4,
+                        maxLat: 37.6
+                    };
+                    lon = OCEAN_BOX.minLon + Math.random() * (OCEAN_BOX.maxLon - OCEAN_BOX.minLon);
+                    lat = OCEAN_BOX.minLat + Math.random() * (OCEAN_BOX.maxLat - OCEAN_BOX.minLat);
+                }
 
                 // Convert to km offsets from Fukushima
                 p.x = (lon - this.FUKUSHIMA_LON) * this.LON_SCALE;
@@ -250,6 +314,10 @@ class ParticleEngine {
                 p.mass = 1.0;
                 p.history = [{x: p.x, y: p.y}];
 
+                // Store actual release location for diagnostics
+                p.releaseLon = lon;
+                p.releaseLat = lat;
+
                 released++;
             }
         }
@@ -257,12 +325,45 @@ class ParticleEngine {
         this.stats.totalReleased += released;
 
         if (released > 0) {
-            console.log(`🎯 Released ${released} particles`);
+            console.log(`🎯 Released ${released} particles (Gaussian σ=30km)`);
+            this.logReleaseStats();
         }
 
         return released;
     }
 
+    // === HELPER METHOD FOR OCEAN VALIDATION ===
+    async isPositionInOcean(lon, lat) {
+        if (!this.hycomLoader) return false;
+
+        try {
+            // Use the HYCOM loader's land mask check
+            // simulationDay = 0 for initial release (March 2011)
+            return await this.hycomLoader.isOcean(lon, lat, 0);
+        } catch (error) {
+            console.warn('Ocean check failed, assuming ocean:', error);
+            return true; // Optimistic fallback
+        }
+    }
+
+    // === DIAGNOSTICS ===
+    logReleaseStats() {
+        const releasedParticles = this.particlePool.filter(p => p.active && p.releaseLon);
+
+        if (releasedParticles.length === 0) return;
+
+        const lons = releasedParticles.map(p => p.releaseLon);
+        const lats = releasedParticles.map(p => p.releaseLat);
+
+        console.log(`   Release area stats:`);
+        console.log(`     Lon: ${Math.min(...lons).toFixed(3)}° to ${Math.max(...lons).toFixed(3)}°`);
+        console.log(`     Lat: ${Math.min(...lats).toFixed(3)}° to ${Math.max(...lats).toFixed(3)}°`);
+
+        // Calculate approximate 30km radius coverage
+        const centerLon = lons.reduce((a, b) => a + b) / lons.length;
+        const centerLat = lats.reduce((a, b) => a + b) / lats.length;
+        console.log(`     Center: ${centerLon.toFixed(3)}°E, ${centerLat.toFixed(3)}°N`);
+    }
     // ==================== CONTINUOUS RELEASE ====================
 
     executeContinuousRelease(deltaDays) {
@@ -317,7 +418,7 @@ class ParticleEngine {
         const activeParticles = this.getActiveParticles();
         if (activeParticles.length === 0) return;
 
-        const monthIndex = this.getCurrentMonthIndex();
+        const currentSimDay = this.stats.simulationDays;
         const positions = [];
         const particleIndices = [];
 
@@ -330,18 +431,17 @@ class ParticleEngine {
             particleIndices.push(i);
         }
 
-        // 2. Get HYCOM velocities (batch call)
+        // 2. Get HYCOM velocities (batch call) - USE simulationDay NOT dayIndex
         const velocities = await this.hycomLoader.getVelocitiesAtMultiple(
             positions,
-            monthIndex
+            currentSimDay  // Pass simulation day directly
         );
 
         // 3. Get EKE diffusivities if available
         const diffusivities = [];
         if (this.ekeLoader) {
             try {
-                const simulationDay = this.stats.simulationDays;
-                const dateKey = await this.ekeLoader.setSimulationDay(simulationDay);
+                const dateKey = await this.ekeLoader.setSimulationDay(currentSimDay);
                 const diffResults = await this.ekeLoader.getDiffusivitiesAtMultiple(
                     positions,
                     dateKey
@@ -371,9 +471,6 @@ class ParticleEngine {
         // 4. Apply physics to each particle
         let updatedCount = 0;
         let decayedCount = 0;
-
-        // Pre-load month data for land checks (more efficient)
-        const monthData = await this.hycomLoader.loadMonth(monthIndex);
 
         for (let i = 0; i < velocities.length; i++) {
             const p = activeParticles[particleIndices[i]];
@@ -406,42 +503,33 @@ class ParticleEngine {
             const lon = this.FUKUSHIMA_LON + (p.x / this.LON_SCALE);
             const lat = this.FUKUSHIMA_LAT + (p.y / this.LAT_SCALE);
 
-            // Check if particle is on land
+            // Check if particle is on land - use currentSimDay
             try {
-                const cell = this.hycomLoader.findNearestCell(lon, lat, monthData);
+                const isOcean = await this.hycomLoader.isOcean(lon, lat, currentSimDay);
 
-                if (cell) {
-                    const u = monthData.uArray[cell.idx];
-                    const isOcean = !isNaN(u);
-
-                    if (!isOcean) {
-                        // Particle moved onto land - revert to previous position
-                        p.x = prevX;
-                        p.y = prevY;
-
-                        // Optionally: Try to find nearest ocean cell and push toward it
-                        const oceanCell = await this.hycomLoader.findNearestOceanCell(lon, lat, monthIndex);
-                        if (oceanCell && oceanCell.distance < 50.0) { // Only if ocean is reasonably close
-                            const oceanLon = oceanCell.lon;
-                            const oceanLat = oceanCell.lat;
-
-                            // Calculate direction vector toward ocean
-                            const dx = (oceanLon - lon) * this.LON_SCALE;
-                            const dy = (oceanLat - lat) * this.LAT_SCALE;
-                            const dist = Math.sqrt(dx*dx + dy*dy);
-
-                            if (dist > 0) {
-                                // Add small push toward ocean
-                                const pushStrength = 3.0; // km/day
-                                p.x += (dx / dist) * pushStrength * deltaDays;
-                                p.y += (dy / dist) * pushStrength * deltaDays;
-                            }
-                        }
-                    }
-                } else {
-                    // No cell found - probably far outside grid, revert
+                if (!isOcean) {
+                    // Particle moved onto land - revert to previous position
                     p.x = prevX;
                     p.y = prevY;
+
+                    // Try to find nearest ocean cell and push toward it
+                    const oceanCell = await this.hycomLoader.findNearestOceanCell(lon, lat, currentSimDay, 10);
+                    if (oceanCell && oceanCell.distance < 50.0) {
+                        const oceanLon = oceanCell.lon;
+                        const oceanLat = oceanCell.lat;
+
+                        // Calculate direction vector toward ocean
+                        const dx = (oceanLon - lon) * this.LON_SCALE;
+                        const dy = (oceanLat - lat) * this.LAT_SCALE;
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+
+                        if (dist > 0) {
+                            // Add small push toward ocean
+                            const pushStrength = 3.0; // km/day
+                            p.x += (dx / dist) * pushStrength * deltaDays;
+                            p.y += (dy / dist) * pushStrength * deltaDays;
+                        }
+                    }
                 }
             } catch (error) {
                 console.warn('Land check error:', error);
@@ -478,11 +566,10 @@ class ParticleEngine {
             console.log(`💀 ${decayedCount} particles decayed`);
         }
     }
-    getCurrentMonthIndex() {
-        const monthsElapsed = Math.floor(this.stats.simulationDays / 30.44);
-        return Math.min(23, Math.max(0, monthsElapsed));
+    getCurrentDayIndex() {
+        // Just return the simulation day (not divided by 30.44)
+        return Math.floor(this.stats.simulationDays);
     }
-
     // ==================== UTILITY METHODS ====================
 
     getActiveParticles() {
@@ -503,15 +590,15 @@ class ParticleEngine {
     getDataSourceInfo() {
         if (!this.hycomLoader) return { source: 'None' };
 
-        const hycomInfo = this.hycomLoader.getCurrentMonthInfo();
+        const hycomInfo = this.hycomLoader.getCurrentDayInfo();
         return {
-            source: 'HYCOM',
-            year: hycomInfo?.year || 'Unknown',
-            month: hycomInfo?.month || 'Unknown',
+            source: 'HYCOM Daily',
+            date: hycomInfo?.date || 'Unknown',
+            daysLoaded: hycomInfo?.daysLoaded || 0,
+            memoryUsage: hycomInfo?.memoryUsage || 'Unknown',
             hasEKE: !!this.ekeLoader
         };
     }
-
     getStatus() {
         const active = this.getActiveParticles();
         return {

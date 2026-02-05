@@ -14,7 +14,7 @@ from datetime import datetime
 import json
 
 # === CONFIGURATION ===
-BINARY_DIR = "../web/data/currents_bin"  # Update path
+BINARY_DIR = "../archive/currents_bin"  # Update path
 OUTPUT_DIR = "../web/data/current_heatmaps"
 
 # Region (will be adjusted based on actual data bounds)
