@@ -1,0 +1,13 @@
+deepseek
+openai
+python-dotenv
+numpy
+pandas
+matplotlib
+xarray
+netCDF4
+scipy
+folium
+ipyleaflet
+tqdm
+jupyterlab

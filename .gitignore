@@ -3,9 +3,9 @@
 */.DS_Store
 
 # Data folders
-web/data/
+data/
 archive/
-
+venv/
 # Python
 __pycache__/
 *.pyc

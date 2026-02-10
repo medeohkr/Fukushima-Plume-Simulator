@@ -17,9 +17,9 @@ import warnings
 
 # ===== CONFIGURATION =====
 TEST_MODE = False  # Set to True for testing, False for full processing
-INPUT_DIR = "/Users/shuian/PycharmProjects/Fukushima_Plume_Simulator/web/data/cmems_EKE_data"
-HYCOM_METADATA_PATH = "/archive/currents_bin/currents_metadata.json"
-OUTPUT_DIR = "/Users/shuian/PycharmProjects/Fukushima_Plume_Simulator/web/data/eke_ultra_optimized2"
+INPUT_DIR = "/Users/shuian/PycharmProjects/Fukushima_Plume_Simulator/data/cmems_EKE_data"
+HYCOM_METADATA_PATH = "/Users/shuian/PycharmProjects/Fukushima_Plume_Simulator/data/currents_bin/currents_metadata.json"
+OUTPUT_DIR = "/Users/shuian/PycharmProjects/Fukushima_Plume_Simulator/data/eke_ultra_optimized2"
 DAILY_OUTPUT_DIR = os.path.join(OUTPUT_DIR, "daily")
 COORDS_FILE = os.path.join(OUTPUT_DIR, "eke_coords.bin")
 os.makedirs(DAILY_OUTPUT_DIR, exist_ok=True)

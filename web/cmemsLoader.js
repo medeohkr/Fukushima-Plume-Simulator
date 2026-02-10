@@ -41,7 +41,7 @@ class StreamingEKELoader {
 
     async loadMetadata() {
         try {
-            const response = await fetch('data/eke_ultra_optimized/eke_metadata.json');
+            const response = await fetch('../data/eke_ultra_optimized/eke_metadata.json');
             this.metadata = await response.json();
             console.log(`✅ Metadata: ${this.metadata.total_days} days (${this.metadata.storage_summary.estimated_total_gb.toFixed(1)}GB)`);
             return this.metadata;
@@ -54,7 +54,7 @@ class StreamingEKELoader {
     async loadCoordinates() {
         try {
             console.log('🗺️ Loading coordinates (once)...');
-            const response = await fetch('data/eke_ultra_optimized/eke_coords.bin');
+            const response = await fetch('../data/eke_ultra_optimized/eke_coords.bin');
             const arrayBuffer = await response.arrayBuffer();
 
             const view = new DataView(arrayBuffer);
@@ -169,7 +169,7 @@ class StreamingEKELoader {
     }
 
     async _loadDayData(dateKey) {
-        const filePath = `data/eke_ultra_optimized/daily/eke_${dateKey}.bin`;
+        const filePath = `../data/eke_ultra_optimized/daily/eke_${dateKey}.bin`;
 
         try {
             const startTime = performance.now();
@@ -261,11 +261,34 @@ class StreamingEKELoader {
         return sign * Math.pow(2, exponent - 15) * (1 + fraction / 1024);
     }
 
-    async getDiffusivityAt(lon, lat, dateKey = null) {
-        // Use current date if not specified
-        if (!dateKey && this.activeDate) {
-            dateKey = this.activeDate;
-        } else if (!dateKey) {
+    async getDiffusivityAt(lon, lat, dateParam = null) {
+        // Determine dateKey based on the parameter type
+        let dateKey;
+
+        if (dateParam === null) {
+            // No parameter - use active date
+            dateKey = this.activeDate || this.metadata.dates[0];
+        } else if (typeof dateParam === 'number') {
+            // It's a simulation day number - convert to date
+            dateKey = this.getDateFromSimulationDay(dateParam);
+        } else if (typeof dateParam === 'string') {
+            // It's already a date string
+            if (dateParam.includes('.')) {
+                // It looks like a float string - convert it
+                const simDay = parseFloat(dateParam);
+                dateKey = this.getDateFromSimulationDay(simDay);
+            } else {
+                // Assume it's already a YYYYMMDD date
+                dateKey = dateParam;
+            }
+        } else {
+            // Fallback
+            dateKey = this.metadata.dates[0];
+        }
+
+        // Validate dateKey format
+        if (!/^\d{8}$/.test(dateKey)) {
+            console.error(`❌ Invalid dateKey format: "${dateKey}", using first available date`);
             dateKey = this.metadata.dates[0];
         }
 
@@ -407,39 +430,27 @@ class StreamingEKELoader {
     // In StreamingEKELoader.js, fix the date conversion:
 
     getDateFromSimulationDay(simulationDay) {
-        // Convert simulation day (0 = March 11, 2011) to date key YYYYMMDD
+        // Make sure we use integer day
+        const dayInteger = Math.floor(simulationDay);
+
         const startDate = new Date('2011-03-11T00:00:00Z');
         const targetDate = new Date(startDate);
-        targetDate.setDate(startDate.getDate() + Math.floor(simulationDay));
+        targetDate.setUTCDate(startDate.getUTCDate() + dayInteger);
 
-        const year = targetDate.getFullYear();
-        const month = String(targetDate.getMonth() + 1).padStart(2, '0');
-        const day = String(targetDate.getDate()).padStart(2, '0');
+        const year = targetDate.getUTCFullYear();
+        const month = String(targetDate.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(targetDate.getUTCDate()).padStart(2, '0');
 
         const dateKey = `${year}${month}${day}`;
 
-        // Find the closest available date in our metadata
-        if (!this.metadata || !this.metadata.dates || this.metadata.dates.length === 0) {
-            return dateKey; // Fallback
+        // Validate it's a proper 8-digit date
+        if (!/^\d{8}$/.test(dateKey)) {
+            console.error(`❌ Failed to convert day ${simulationDay} to date, got: "${dateKey}"`);
+            return this.metadata?.dates[0] || '20110311';
         }
 
-        // If exact date exists, use it
-        if (this.metadata.dates.includes(dateKey)) {
-            return dateKey;
-        }
-
-        // Otherwise find the closest date (usually the next available)
-        const dates = this.metadata.dates.sort();
-        for (let i = 0; i < dates.length; i++) {
-            if (dates[i] >= dateKey) {
-                return dates[i];
-            }
-        }
-
-        // Fallback to last date
-        return dates[dates.length - 1];
+        return dateKey;
     }
-
     async setSimulationDay(simulationDay) {
         const dateKey = this.getDateFromSimulationDay(simulationDay);
         console.log(`📅 Setting EKE date: day ${simulationDay.toFixed(1)} → ${dateKey}`);

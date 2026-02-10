@@ -1,192 +1,391 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <!-- Existing Leaflet CSS -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fukushima Plume Simulator - 3D Physics</title>
+
+    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
-    <!-- Add Mapbox GL (for deck.gl basemap if needed) -->
-    <link href="https://api.mapbox.com/mapbox-gl-js/v2.8.1/mapbox-gl.css" rel="stylesheet" />
+    <!-- Deck.gl CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/deck.gl@latest/dist/deckgl.css" />
 
-    <title>Fukushima Plume Simulator - Hybrid Leaflet + deck.gl</title>
-    <meta charset="UTF-8">
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
     <style>
-        /* === EXISTING STYLES (keep everything) === */
-        body {
+        * {
             margin: 0;
-            overflow: hidden;
-            background: #0a1929;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-
-        #map {
-            position: fixed;
-            top: 0;
-            left: 360px;
-            right: 0;
-            height: 100vh;
-            z-index: 1;
-            background: #0a1929;
-        }
-
-        #controls {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 360px;
-            height: 100vh;
-            z-index: 1000;
-            background: rgba(10, 25, 41, 0.97);
-            backdrop-filter: blur(10px);
-            color: white;
-            box-shadow: 4px 0 20px rgba(0, 0, 0, 0.4);
-            border-right: 1px solid rgba(79, 195, 247, 0.2);
-            overflow-y: auto;
-            padding: 20px;
+            padding: 0;
             box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a1929 0%, #1a2b3c 100%);
+            color: #e0e0e0;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #app {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Sidebar */
+        #sidebar {
+            width: 360px;
+            background: rgba(15, 30, 45, 0.95);
+            backdrop-filter: blur(10px);
+            border-right: 1px solid rgba(79, 195, 247, 0.2);
             display: flex;
             flex-direction: column;
+            z-index: 1000;
+            box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
         }
 
-        /* === HEADER WITH DATE/TIME === */
-        .header-section {
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid rgba(79, 195, 247, 0.3);
+        .sidebar-header {
+            padding: 25px;
+            border-bottom: 1px solid rgba(79, 195, 247, 0.2);
+            background: linear-gradient(135deg, rgba(10, 25, 41, 0.9), rgba(15, 30, 45, 0.9));
         }
 
-        .header-section h3 {
-            margin: 0 0 15px 0;
+        .sidebar-header h1 {
+            font-size: 24px;
             color: #4fc3f7;
-            font-size: 22px;
-        }
-
-        .date-time-display {
-            background: rgba(20, 30, 48, 0.8);
-            border-radius: 8px;
-            padding: 12px;
-            border: 1px solid rgba(79, 195, 247, 0.3);
-        }
-
-        .date-display {
-            text-align: center;
             margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
-        .date-label {
-            display: block;
-            font-size: 18px;
-            font-weight: bold;
-            color: #4fc3f7;
+        .sidebar-header h1 i {
+            font-size: 28px;
         }
 
-        .time-label {
-            display: block;
-            font-size: 16px;
-            font-family: 'Courier New', monospace;
-            color: #b0bec5;
-        }
-
-        .sim-day {
-            text-align: center;
+        .subtitle {
             font-size: 14px;
-            color: #90a4ae;
-            padding-top: 8px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            color: #b0bec5;
+            line-height: 1.5;
         }
 
-        /* === TIME SLIDER SECTION === */
-        .time-section {
-            background: rgba(20, 30, 48, 0.6);
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 20px;
-            border: 1px solid rgba(79, 195, 247, 0.2);
+        /* Controls Section */
+        #simulation-controls {
+            padding: 25px;
+            flex-grow: 1;
+            overflow-y: auto;
         }
 
-        .time-slider-container {
-            position: relative;
-            margin: 15px 0 5px 0;
+        .control-group {
+            margin-bottom: 25px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
 
-        #timeSlider {
-            width: 100%;
+        .control-group:last-child {
+            border-bottom: none;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 10px;
+            color: #b0bec5;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .slider-container input[type="range"] {
+            flex-grow: 1;
             height: 6px;
+            -webkit-appearance: none;
             background: rgba(79, 195, 247, 0.2);
             border-radius: 3px;
             outline: none;
-            -webkit-appearance: none;
         }
 
-        #timeSlider::-webkit-slider-thumb {
+        .slider-container input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
             width: 20px;
             height: 20px;
             background: #4fc3f7;
             border-radius: 50%;
             cursor: pointer;
-            border: 3px solid white;
-            box-shadow: 0 0 10px rgba(79, 195, 247, 0.8);
+            border: 2px solid #0a1929;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
         }
 
-        .time-ticks {
+        .slider-value {
+            min-width: 60px;
+            padding: 6px 12px;
+            background: rgba(79, 195, 247, 0.1);
+            border-radius: 4px;
+            text-align: center;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #4fc3f7;
+            border: 1px solid rgba(79, 195, 247, 0.3);
+        }
+
+        .button-group {
             display: flex;
-            justify-content: space-between;
-            margin-top: 5px;
-            font-size: 10px;
-            color: #78909c;
-        }
-
-        .time-ticks span {
-            transform: rotate(-45deg);
-            transform-origin: top left;
-            display: inline-block;
+            gap: 12px;
             margin-top: 15px;
         }
 
-        /* === REST OF CONTROLS === */
-        .physics-note {
-            background: rgba(79, 195, 247, 0.1);
-            border-left: 3px solid #4fc3f7;
-            padding: 10px 12px;
-            margin: 15px 0;
-            font-size: 12px;
-            color: #b0bec5;
-            border-radius: 0 5px 5px 0;
-        }
-
-        .parameter-section h4 {
-            color: #b0bec5;
-            margin: 20px 0 12px 0;
-            font-size: 15px;
-            border-left: 3px solid #4fc3f7;
-            padding-left: 10px;
-        }
-
-        .slider-container {
-            margin: 15px 0;
-        }
-
-        .slider-container label {
-            display: block;
-            margin-bottom: 6px;
-            font-size: 13px;
-            color: #b0bec5;
-        }
-
-        .value-display {
-            color: #4fc3f7;
-            font-weight: bold;
-        }
-
-        .toggle-container {
+        .btn {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
             display: flex;
             align-items: center;
-            margin: 12px 0;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #4fc3f7, #2979ff);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #2979ff, #4fc3f7);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(41, 121, 255, 0.3);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #ff6b6b, #ff4757);
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: linear-gradient(135deg, #ff4757, #ff6b6b);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 71, 87, 0.3);
+        }
+
+        /* Stats Section */
+        #simulation-stats {
+            padding: 20px;
+            background: rgba(10, 25, 41, 0.7);
+            border-radius: 8px;
+            margin-top: 20px;
+            border: 1px solid rgba(79, 195, 247, 0.2);
+        }
+
+        #simulation-stats div {
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 14px;
+            display: flex;
             justify-content: space-between;
         }
 
+        #simulation-stats div:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+
+        .stat-label {
+            color: #b0bec5;
+        }
+
+        .stat-value {
+            color: #4fc3f7;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+
+        /* Time Display */
+        .time-display {
+            background: rgba(10, 25, 41, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border: 1px solid rgba(79, 195, 247, 0.2);
+        }
+
+        .time-display div {
+            font-size: 14px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .time-display div:last-child {
+            margin-bottom: 0;
+        }
+
+        .time-label {
+            color: #b0bec5;
+        }
+
+        .time-value {
+            color: #4fc3f7;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+
+        /* Map Container */
+        #map-container {
+            flex-grow: 1;
+            position: relative;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Deck.gl Overlay */
+        #deckgl-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 500;
+        }
+
+        /* Legend */
+        .map-legend {
+            position: absolute;
+            bottom: 30px;
+            right: 20px;
+            background: rgba(10, 25, 41, 0.95);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            z-index: 1000;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(79, 195, 247, 0.3);
+            max-width: 220px;
+            backdrop-filter: blur(10px);
+        }
+
+        .map-legend h4 {
+            margin: 0 0 15px 0;
+            font-size: 15px;
+            color: #4fc3f7;
+            text-align: center;
+        }
+
+        .legend-gradient {
+            height: 180px;
+            width: 25px;
+            margin: 0 auto 15px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .legend-labels {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            height: 180px;
+            margin-left: 35px;
+            margin-top: -195px;
+        }
+
+        .legend-labels span {
+            font-size: 11px;
+            color: #b0bec5;
+            font-family: 'Courier New', monospace;
+        }
+
+        .legend-note {
+            margin-top: 15px;
+            font-size: 10px;
+            color: #78909c;
+            text-align: center;
+            font-style: italic;
+        }
+
+        /* Footer */
+        .sidebar-footer {
+            padding: 20px;
+            border-top: 1px solid rgba(79, 195, 247, 0.2);
+            background: rgba(10, 25, 41, 0.8);
+            font-size: 12px;
+            color: #78909c;
+            text-align: center;
+        }
+
+        .sidebar-footer a {
+            color: #4fc3f7;
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+
+        .sidebar-footer a:hover {
+            color: #ff6b6b;
+            text-decoration: underline;
+        }
+
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            #sidebar {
+                width: 320px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            #app {
+                flex-direction: column;
+            }
+
+            #sidebar {
+                width: 100%;
+                height: 40vh;
+            }
+
+            #map-container {
+                height: 60vh;
+            }
+        }
+
+        /* Scrollbar Styling */
+        #simulation-controls::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        #simulation-controls::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+        }
+
+        #simulation-controls::-webkit-scrollbar-thumb {
+            background: rgba(79, 195, 247, 0.3);
+            border-radius: 3px;
+        }
+
+        #simulation-controls::-webkit-scrollbar-thumb:hover {
+            background: rgba(79, 195, 247, 0.5);
+        }
+        /* Toggle switch styling */
         .toggle-switch {
             position: relative;
+            display: inline-block;
             width: 50px;
             height: 24px;
         }
@@ -204,9 +403,10 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background-color: #2c3e50;
-            border-radius: 24px;
+            background-color: rgba(79, 195, 247, 0.2);
             transition: .4s;
+            border-radius: 34px;
+            border: 1px solid rgba(79, 195, 247, 0.3);
         }
 
         .toggle-slider:before {
@@ -215,347 +415,166 @@
             height: 16px;
             width: 16px;
             left: 4px;
-            bottom: 4px;
-            background-color: white;
-            border-radius: 50%;
-            transition: .4s;
-        }
-
-        input:checked + .toggle-slider {
+            bottom: 3px;
             background-color: #4fc3f7;
+            transition: .4s;
+            border-radius: 50%;
         }
 
-        input:checked + .toggle-slider:before {
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: rgba(79, 195, 247, 0.4);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
             transform: translateX(26px);
         }
-
-        input[type="range"] {
+        /* Add to your CSS in index.html */
+        .particle-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100%;
-            height: 6px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 3px;
-            outline: none;
-            -webkit-appearance: none;
-        }
-
-        input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 18px;
-            height: 18px;
-            background: #4fc3f7;
-            border-radius: 50%;
-            cursor: pointer;
-            border: 2px solid white;
-        }
-
-        .button-section {
-            margin-top: auto;
-            padding-top: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        button {
-            background: linear-gradient(135deg, #4fc3f7, #2979ff);
-            color: white;
-            border: none;
-            padding: 14px 0;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 15px;
-            transition: all 0.3s;
-            width: 100%;
-        }
-
-        button:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(79, 195, 247, 0.4);
-        }
-
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        button#resetBtn {
-            background: linear-gradient(135deg, #ff6b6b, #ff4757);
-        }
-
-        .data-source {
-            margin-top: 20px;
-            padding-top: 15px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            font-size: 12px;
-            color: #90a4ae;
-            text-align: center;
-        }
-
-        .stats-row {
-            display: flex;
-            justify-content: space-around;
-            margin-top: 8px;
-            font-size: 11px;
-        }
-
-        .stats-row span {
-            padding: 4px 8px;
-            background: rgba(20, 30, 48, 0.6);
-            border-radius: 4px;
-        }
-
-        .note {
-            font-size: 11px;
-            color: #78909c;
-            margin-top: 5px;
-            font-style: italic;
-        }
-
-        /* === LEAFLET CONTROLS === */
-        .leaflet-control-attribution {
-            background: rgba(0, 0, 0, 0.7) !important;
-            color: #aaa !important;
-            font-size: 10px !important;
-            padding: 2px 8px !important;
-        }
-
-        .leaflet-control-zoom {
-            margin-left: 1000px !important;
-            margin-top: 20px !important;
-        }
-
-        .leaflet-control-scale {
-            margin-left: 380px !important;
-            margin-bottom: 20px !important;
-        }
-
-        /* === ADD NEW STYLES FOR DECK.GL OVERLAY === */
-        #deckgl-overlay {
-            position: fixed !important;
-            top: 0 !important;
-            left: 360px !important;
-            width: calc(100% - 360px) !important;
-            height: 100vh !important;
-            z-index: 300 !important;
-            pointer-events: none !important;
-            mix-blend-mode: screen;
-        }
-
-        .leaflet-top, .leaflet-bottom {
-            z-index: 1000 !important;
-        }
-
-        /* === HEATMAP CONTROL STYLES === */
-        #heatmap-control {
-            position: fixed;
-            bottom: 20px;
-            left: 380px;
-            background: rgba(10, 25, 41, 0.95);
-            border-radius: 8px;
-            padding: 12px;
-            z-index: 1000;
-            border: 1px solid rgba(79, 195, 247, 0.3);
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 13px;
-            color: white;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-            backdrop-filter: blur(10px);
-        }
-
-        #heatmap-control h4 {
-            margin: 0 0 10px 0;
-            color: #4fc3f7;
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .heatmap-slider {
-            width: 180px;
-            margin: 10px 0;
-        }
-
-        .heatmap-slider input[type="range"] {
-            width: 100%;
-            margin: 5px 0;
-        }
-
-        .heatmap-option {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin: 8px 0;
-        }
-
-        .toggle-switch.small {
-            width: 40px;
-            height: 20px;
-        }
-
-        .toggle-switch.small .toggle-slider:before {
-            height: 12px;
-            width: 12px;
-            left: 4px;
-            bottom: 4px;
-        }
-
-        .toggle-switch.small input:checked + .toggle-slider:before {
-            transform: translateX(20px);
-        }
-
-        .color-legend {
-            display: flex;
-            align-items: center;
-            margin: 10px 0;
-            gap: 10px;
-        }
-
-        .color-gradient {
-            flex: 1;
-            height: 20px;
-            background: linear-gradient(to right,
-                rgba(30, 144, 255, 0.8),
-                rgba(50, 205, 50, 0.8),
-                rgba(255, 215, 0, 0.8),
-                rgba(255, 69, 0, 0.8)
-            );
-            border-radius: 3px;
-        }
-
-        .color-labels {
-            display: flex;
-            justify-content: space-between;
-            font-size: 10px;
-            color: #b0bec5;
-            margin-top: 5px;
+            height: 100%;
+            pointer-events: none;
+            z-index: 400;
         }
     </style>
 </head>
 <body>
-    <!-- MAP CONTAINER (for Leaflet) -->
-    <div id="map"></div>
+    <div id="app">
+        <!-- Sidebar -->
+        <div id="sidebar">
+            <div class="sidebar-header">
+                <h1><i class="fas fa-radiation-alt"></i> Fukushima Plume Simulator</h1>
+                <p class="subtitle">
+                    3D Physics Simulation of Cs-137 dispersion in the Pacific Ocean
+                    using HYCOM currents and EKE-driven turbulent diffusion
+                </p>
+            </div>
 
-    <!-- DECK.GL OVERLAY CANVAS -->
-    <canvas id="deckgl-overlay"></canvas>
-
-    <!-- HEATMAP CONTROL PANEL -->
-    <div id="heatmap-control" style="display: none;">
-        <h4>🌡️ Heatmap Settings</h4>
-
-        <div class="heatmap-option">
-            <span>Show Heatmap</span>
-            <label class="toggle-switch small">
-                <input type="checkbox" id="heatmapToggle" checked>
-                <span class="toggle-slider"></span>
-            </label>
-        </div>
-
-        <div class="heatmap-slider">
-            <label>Intensity: <span id="intensityValue">1.0</span>x</label>
-            <input type="range" id="intensitySlider" min="0.1" max="10.0" step="0.1" value="1.0">
-        </div>
-
-        <div class="heatmap-slider">
-            <label>Radius: <span id="radiusValue">50</span>px</label>
-            <input type="range" id="radiusSlider" min="10" max="200" step="5" value="50">
-        </div>
-
-        <div class="color-legend">
-            <div style="flex: 1;">
-                <div class="color-gradient"></div>
-                <div class="color-labels">
-                    <span>Low</span>
-                    <span>High</span>
+            <div id="simulation-controls">
+                <!-- Physics Controls -->
+                <div class="control-group">
+                    <label><i class="fas fa-wind"></i> Turbulent Diffusion Scale</label>
+                    <div class="slider-container">
+                        <input type="range" id="diffusionSlider" min="0" max="2" step="0.1" value="1.0">
+                        <span id="diffusionValue" class="slider-value">1.0</span>
+                    </div>
+                    <small style="color: #78909c; display: block; margin-top: 8px;">
+                        0 = Pure HYCOM advection, 1 = Realistic EKE diffusion
+                    </small>
                 </div>
+
+                <div class="control-group">
+                    <label><i class="fas fa-tachometer-alt"></i> Simulation Speed</label>
+                    <div class="slider-container">
+                        <input type="range" id="speedSlider" min="0.1" max="10" step="0.1" value="1.0">
+                        <span id="speedValue" class="slider-value">1.0</span>
+                    </div>
+                    <small style="color: #78909c; display: block; margin-top: 8px;">
+                        1.0 = Real-time, 10.0 = 10× faster
+                    </small>
+                </div>
+
+                <!-- Control Buttons -->
+                <div class="control-group">
+                    <label><i class="fas fa-play-circle"></i> Simulation Controls</label>
+                    <div class="button-group">
+                        <button id="startBtn" class="btn btn-primary">
+                            <i class="fas fa-play"></i> Start Simulation
+                        </button>
+                        <button id="resetBtn" class="btn btn-secondary">
+                            <i class="fas fa-redo"></i> Reset
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Visualization Mode -->
+                <div class="control-group">
+                    <label><i class="fas fa-eye"></i> Visualization Mode</label>
+                    <div class="button-group">
+                        <button id="btn-concentration" class="btn active">
+                            <i class="fas fa-heatmap"></i> Concentration
+                        </button>
+                        <button id="btn-particles" class="btn">
+                            <i class="fas fa-dot-circle"></i> Particles
+                        </button>
+                    </div>
+                    <small style="color: #78909c; display: block; margin-top: 8px;">
+                        Concentration: Bq/m³ heatmap | Particles: Individual trails
+                    </small>
+                </div>
+                                <!-- Add after visualization mode buttons -->
+                <div class="control-group">
+                    <label><i class="fas fa-stream"></i> Particle Trails</label>
+                    <div class="toggle-container" style="display: flex; align-items: center; justify-content: space-between; margin-top: 8px;">
+                        <span style="font-size: 14px; color: #b0bec5;">Show particle trails</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="trailsToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+
+                <!-- Time Display -->
+                <div class="time-display">
+                    <div>
+                        <span class="time-label"><i class="far fa-calendar-alt"></i> Simulation Day:</span>
+                        <span id="simulation-day" class="time-value">Day 0.0</span>
+                    </div>
+                    <div>
+                        <span class="time-label"><i class="far fa-clock"></i> Date & Time:</span>
+                        <span id="simulation-date" class="time-value">2011-03-11 00:00</span>
+                    </div>
+                </div>
+
+                <!-- Statistics -->
+                <div id="simulation-stats">
+                    <div>
+                        <span class="stat-label">Active Particles:</span>
+                        <span class="stat-value">0</span>
+                    </div>
+                    <div>
+                        <span class="stat-label">Total Released:</span>
+                        <span class="stat-value">0</span>
+                    </div>
+                    <div>
+                        <span class="stat-label">Decayed:</span>
+                        <span class="stat-value">0</span>
+                    </div>
+                    <div>
+                        <span class="stat-label">Days Elapsed:</span>
+                        <span class="stat-value">0.0</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <p>
+                    <i class="fas fa-info-circle"></i>
+                    Simulation based on HYCOM 2011-2013 ocean currents and AVISO EKE data
+                </p>
+                <p style="margin-top: 8px;">
+                    <i class="fas fa-code"></i>
+                    3D Physics with vertical mixing (Rypina et al. 2013)
+                </p>
             </div>
         </div>
 
-        <div style="font-size: 11px; color: #78909c; margin-top: 10px;">
-            WebGL-accelerated concentration visualization
+        <!-- Map Container -->
+        <div id="map-container">
+            <div id="map"></div>
+            <canvas id="deckgl-overlay"></canvas>
         </div>
     </div>
-
-    <!-- CONTROLS PANEL - NOW ON LEFT -->
-    <div id="controls">
-
-        <!-- HEADER WITH DATE/TIME -->
-        <div class="header-section">
-            <h3>🌊 Fukushima Plume Simulator</h3>
-            <div class="date-time-display">
-                <div class="date-display" id="dateDisplay">
-                    <span class="date-label">March 11, 2011</span>
-                </div>
-                <div class="sim-day" id="simDayDisplay">
-                    Simulation Day: <span id="simDay">0</span>
-                </div>
-            </div>
-        </div>
-        <div class="stats-row">
-            <span>Active: <span id="particleCount">0</span></span>
-            <span>Released: <span id="totalReleased">0</span></span>  <!-- Add this -->
-            <span>Decayed: <span id="decayedCount">0</span></span>
-        </div>
-
-        <!-- SIMULATION CONTROLS -->
-        <div class="parameter-section">
-            <h4>Ocean Currents</h4>
-
-            <div class="slider-container">
-                <label>Kuroshio Strength: <span id="kuroshioValue">1.0</span>x</label>
-                <input type="range" id="kuroshioSlider" min="0" max="3" step="0.1" value="1.0">
-                <div class="note">Boost or weaken the Kuroshio current</div>
-            </div>
-
-            <!-- Update the diffusion slider label -->
-            <div class="slider-container">
-                <label>EKE Scale: <span id="diffusionValue">1.0</span>x</label>
-                <input type="range" id="diffusionSlider" min="0.0" max="5.0" step="0.1" value="1.0">
-                <div class="note">Multiplies EKE diffusion values (0 = no diffusion)</div>
-            </div>
-
-
-            <h4>Simulation Control</h4>
-
-            <div class="slider-container">
-                <label>Simulation Speed: <span id="speedValue">1.0</span>x</label>
-                <input type="range" id="speedSlider" min="0.1" max="10" step="0.1" value="1.0">
-                <div class="note">1x = 1 simulation day per real second</div>
-            </div>
-
-            <!-- HEATMAP TOGGLE - PLACED INSIDE CONTROLS PANEL -->
-            <div class="toggle-container" style="margin-top: 15px;">
-                <label>🌡️ WebGL Heatmap</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="heatmapToggleMain" checked>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-        </div>
-
-        <!-- ACTION BUTTONS -->
-        <div class="button-section">
-            <button id="startBtn">▶ Start Simulation</button>
-            <button id="resetBtn">↻ Reset Simulation</button>
-            <div class="note" style="text-align: center;">
-            </div>
-        </div>
-
-
-    </div> <!-- END OF CONTROLS PANEL -->
-
-    <!-- JAVASCRIPT FILES -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-    <!-- Add deck.gl and Mapbox -->
-    <!-- In index.html, update script tags: -->
     <script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
-    <!-- ADD THIS for HeatmapLayer support: -->
     <script src="https://unpkg.com/@deck.gl/aggregation-layers@8.9.35/dist.min.js"></script>
-    <script src="https://api.mapbox.com/mapbox-gl-js/v2.8.1/mapbox-gl.js"></script>
+    <script src="https://unpkg.com/@deck.gl/layers@8.9.35/dist.min.js"></script>
+    <!-- Mapbox is optional since we're using Leaflet as base -->
     <script src="hycomLoader.js"></script>
-    <script src="streamingEKELoader.js"></script>
+    <script src="cmemsLoader.js"></script>
     <script src="particleEngine.js"></script>
     <script src="app.js"></script>
 </body>
