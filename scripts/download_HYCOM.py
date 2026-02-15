@@ -29,8 +29,8 @@ class HYCOMDownloader:
         os.makedirs(output_dir, exist_ok=True)
 
         # HYCOM expt_90.9 available period
-        self.start_date = datetime(2011, 3, 1)
-        self.end_date = datetime(2012, 2, 29)
+        self.start_date = datetime(2012, 3, 1)
+        self.end_date = datetime(2013, 2, 28)
 
         # Spatial domain for Fukushima research
         self.bbox = {

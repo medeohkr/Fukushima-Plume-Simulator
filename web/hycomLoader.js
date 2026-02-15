@@ -327,7 +327,7 @@ class StreamingHYCOMLoader_3D {
         // DIRECT array access
         const u = dayData.uArray[idx];
         const v = dayData.vArray[idx];
-        const isOcean = !isNaN(u) && !isNaN(v);
+        const isOcean = !isNaN(u) && !isNaN(v) && Math.abs(u) < 1000 && Math.abs(v) < 1000;
 
         return {
             u: isOcean ? u : 0,
@@ -367,7 +367,7 @@ class StreamingHYCOMLoader_3D {
                 if (idx < dayData.totalDataPoints) {
                     const u = dayData.uArray[idx];
                     const v = dayData.vArray[idx];
-                    const isOcean = !isNaN(u) && !isNaN(v);
+                    const isOcean = !isNaN(u) && !isNaN(v) && Math.abs(u) < 1000 && Math.abs(v) < 1000;
 
                     results[k] = {
                         u: isOcean ? u : 0,
@@ -641,6 +641,9 @@ class StreamingHYCOMLoader_3D {
             const depthIndex = this.getDepthIndex(depth);
             const idx = (depthIndex * dayData.totalCells) + cell.idx;
             const u = dayData.uArray[idx];
+
+            // 🟢 FIX: -9999 is NOT ocean
+            if (Math.abs(u) > 1000) return false;
 
             return !isNaN(u);
 
