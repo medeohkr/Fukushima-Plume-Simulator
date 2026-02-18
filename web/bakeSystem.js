@@ -148,31 +148,15 @@ class BakeSystem {
         }
     }
     async runSimulationStep(engine, deltaDays) {
-        // Store original running state
-        const wasRunning = engine.isRunning;
+        const STEP_SIZE = 0.1; // Always 0.1 days per step
+        const steps = Math.ceil(deltaDays / STEP_SIZE);
+        const actualStepSize = deltaDays / steps; // Adjust slightly to hit exact total
 
-        // Make sure engine thinks it's running
-        if (!wasRunning) {
-            engine.startSimulation();
-        }
-
-        // Set lastUpdateTime to now to avoid huge delta
-        engine.lastUpdateTime = Date.now();
-
-        // Calculate how many update cycles we need
-        const targetDay = engine.stats.simulationDays + deltaDays;
-
-        while (engine.stats.simulationDays < targetDay - 0.01) {
-            // Let engine.update() handle the timing
-            await engine.update();
-
-            // Small delay to keep UI responsive
+        for (let i = 0; i < steps; i++) {
+            engine.stats.simulationDays += actualStepSize;
+            await engine.updateParticles(actualStepSize);
+            engine.executeContinuousRelease(actualStepSize);
             await new Promise(resolve => setTimeout(resolve, 0));
-        }
-
-        // Restore original running state if needed
-        if (!wasRunning) {
-            engine.pauseSimulation();
         }
     }
 
