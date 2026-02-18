@@ -1,30 +1,349 @@
-// particleEngine3D_final.js - ORIGINAL WORKING VERSION + 16.2 PBq calibration
-console.log('=== Loading ParticleEngine3D (Original Working Version) ===');
+// particleEngine3D_final.js - COMPLETE REWRITE WITH MULTI-TRACER SUPPORT
+console.log('=== Loading ParticleEngine3D (Multi-Tracer Version) ===');
+
+// ==================== TRACER LIBRARY ====================
+
+const TracerLibrary = {
+    // ===== RADIONUCLIDES =====
+    cs137: {
+        id: 'cs137',
+        name: 'Cesium-137',
+        type: 'radionuclide',
+        halfLife: 11000, // days (30.1 years)
+        units: 'Bq',
+        defaultTotal: 16.2e15, // 16.2 PBq
+        color: '#ff6b6b',
+        description: 'Fukushima signature isotope',
+        behavior: {
+            diffusivityScale: 1.0,
+            settlingVelocity: 0,
+            decay: true,
+            sigmaH: 10000,
+            sigmaV: 50
+        }
+    },
+
+    cs134: {
+        id: 'cs134',
+        name: 'Cesium-134',
+        type: 'radionuclide',
+        halfLife: 750, // days (~2 years)
+        units: 'Bq',
+        defaultTotal: 1.8e15, // ~1.8 PBq
+        color: '#ff9f6b',
+        description: 'Shorter-lived cesium isotope',
+        behavior: {
+            diffusivityScale: 1.0,
+            settlingVelocity: 0,
+            decay: true,
+            sigmaH: 10000,
+            sigmaV: 50
+        }
+    },
+
+    i131: {
+        id: 'i131',
+        name: 'Iodine-131',
+        type: 'radionuclide',
+        halfLife: 8, // days
+        units: 'Bq',
+        defaultTotal: 10.0e15, // ~10 PBq
+        color: '#9f6bff',
+        description: 'Short-lived but biologically significant',
+        behavior: {
+            diffusivityScale: 1.1,
+            settlingVelocity: 0,
+            decay: true,
+            sigmaH: 12000,
+            sigmaV: 60
+        }
+    },
+
+    sr90: {
+        id: 'sr90',
+        name: 'Strontium-90',
+        type: 'radionuclide',
+        halfLife: 10500, // days (~29 years)
+        units: 'Bq',
+        defaultTotal: 0.2e15, // ~0.2 PBq
+        color: '#6b9fff',
+        description: 'Bone-seeking radionuclide',
+        behavior: {
+            diffusivityScale: 0.9,
+            settlingVelocity: 0,
+            decay: true,
+            sigmaH: 9000,
+            sigmaV: 45
+        }
+    },
+
+    h3: {
+        id: 'h3',
+        name: 'Tritium (H-3)',
+        type: 'radionuclide',
+        halfLife: 4500, // days (~12.3 years)
+        units: 'Bq',
+        defaultTotal: 1.0e15, // ~1 PBq
+        color: '#6bff9f',
+        description: 'Forms HTO (tritiated water)',
+        behavior: {
+            diffusivityScale: 1.1,
+            settlingVelocity: 0,
+            decay: true,
+            sigmaH: 11000,
+            sigmaV: 55
+        }
+    },
+
+    // ===== HYDROCARBONS =====
+    lightOil: {
+        id: 'lightOil',
+        name: 'Light Crude Oil',
+        type: 'hydrocarbon',
+        density: 850, // kg/m³ (floats)
+        units: 'tons',
+        defaultTotal: 10000, // 10,000 tons
+        color: '#8B7355',
+        description: 'Floating oil slick, evaporates',
+        behavior: {
+            diffusivityScale: 1.2,
+            settlingVelocity: -0.2, // rises (m/day)
+            beaching: 0.9,
+            evaporation: 0.1, // per day
+            sigmaH: 15000,
+            sigmaV: 20 // stays near surface
+        }
+    },
+
+    heavyOil: {
+        id: 'heavyOil',
+        name: 'Heavy Fuel Oil',
+        type: 'hydrocarbon',
+        density: 980, // kg/m³ (near neutral)
+        units: 'tons',
+        defaultTotal: 5000,
+        color: '#4A3C31',
+        description: 'Sinks and persists',
+        behavior: {
+            diffusivityScale: 0.7,
+            settlingVelocity: 0.1, // slowly sinks
+            beaching: 0.95,
+            evaporation: 0.02,
+            sigmaH: 8000,
+            sigmaV: 30
+        }
+    },
+};
+
+// ==================== RELEASE PHASE MANAGER ====================
+
+class ReleasePhase {
+    constructor(start = 0, end = 30, total = 1000, unit = 'GBq') {
+        this.start = start;
+        this.end = end;
+        this.total = total;      // Now it's TOTAL, not rate!
+        this.unit = unit;
+    }
+
+    getDuration() {
+        return this.end - this.start;
+    }
+
+    getRate() {
+        // Calculate rate from total and duration
+        // This returns in the ORIGINAL units (GBq, TBq, PBq, etc.)
+        return this.total / this.getDuration();
+    }
+
+    getRateWithUnit() {
+        const rate = this.getRate();
+        if (rate >= 1e6) return `${(rate/1e6).toFixed(2)} PBq/day`;
+        if (rate >= 1e3) return `${(rate/1e3).toFixed(2)} TBq/day`;
+        return `${rate.toFixed(2)} GBq/day`;
+    }
+}
+
+class ReleaseManager {
+    constructor(tracerId = 'cs137') {
+        this.tracerId = tracerId;
+        this.tracer = TracerLibrary[tracerId] || TracerLibrary.cs137;
+        this.phases = [];
+        this.addDefaultPhase();
+    }
+
+    setTracer(tracerId) {
+        this.tracerId = tracerId;
+        this.tracer = TracerLibrary[tracerId] || TracerLibrary.cs137;
+    }
+
+    addDefaultPhase() {
+        // Create a default phase with TOTAL, not rate
+        let defaultTotal, defaultUnit;
+
+        switch(this.tracer.type) {
+            case 'radionuclide':
+                defaultTotal = this.tracer.defaultTotal / 1e9; // Convert to GBq
+                defaultUnit = 'GBq';
+                break;
+            case 'hydrocarbon':
+            case 'particulate':
+                defaultTotal = this.tracer.defaultTotal;
+                defaultUnit = 'tons';
+                break;
+            default:
+                defaultTotal = this.tracer.defaultTotal;
+                defaultUnit = 'kg';
+        }
+
+        this.phases = [new ReleasePhase(0, 30, defaultTotal, defaultUnit)];
+    }
+
+    addPhase(start, end, total, unit) {
+        this.phases.push(new ReleasePhase(start, end, total, unit));
+        this.sortPhases();
+    }
+
+    removePhase(index) {
+        if (this.phases.length > 1) {
+            this.phases.splice(index, 1);
+        }
+    }
+
+    sortPhases() {
+        this.phases.sort((a, b) => a.start - b.start);
+    }
+
+    convertToBaseUnit(amount, fromUnit) {
+        const conversions = {
+            'Bq': 1e-9,
+            'kBq': 1e-6,
+            'MBq': 1e-3,
+            'GBq': 1,
+            'TBq': 1000,
+            'PBq': 1e6,
+            'kg': 1,
+            'tons': 1000,
+            'organisms': 1
+        };
+        return amount * (conversions[fromUnit] || 1);
+    }
+
+    getRateAtDay(day) {
+        for (const phase of this.phases) {
+            if (day >= phase.start && day <= phase.end) {
+                return phase.getRate();
+            }
+        }
+        return 0;
+    }
+
+    getTotalRelease() {
+        let total = 0;
+        this.phases.forEach(phase => {
+            total += phase.total * this.convertToBaseUnit(1, phase.unit);
+        });
+        return total;
+    }
+
+    getParticleActivity(totalParticles) {
+        const totalInBaseUnit = this.getTotalRelease();
+        return totalInBaseUnit / totalParticles;
+    }
+
+    // New method for UI display
+    getCurrentStats(currentSimDay) {
+        let activePhase = null;
+        for (const phase of this.phases) {
+            if (currentSimDay >= phase.start && currentSimDay <= phase.end) {
+                activePhase = phase;
+                break;
+            }
+        }
+
+        if (!activePhase) {
+            return {
+                hasActivePhase: false,
+                currentRate: 0,
+                currentRateDisplay: 'No active release',
+                particlesPerDay: 0,
+                totalRelease: this.getTotalRelease(),
+                totalDisplay: this.formatTotal(this.getTotalRelease())
+            };
+        }
+
+        const rateInBase = activePhase.getRate();
+        const particlesPerDay = rateInBase / this.getParticleActivity(10000); // Need particle count
+
+        return {
+            hasActivePhase: true,
+            phaseStart: activePhase.start,
+            phaseEnd: activePhase.end,
+            currentRate: rateInBase,
+            currentRateDisplay: this.formatRate(rateInBase, activePhase.unit),
+            particlesPerDay: particlesPerDay,
+            totalRelease: this.getTotalRelease(),
+            totalDisplay: this.formatTotal(this.getTotalRelease())
+        };
+    }
+
+    formatRate(rate, unit) {
+        // Convert rate to appropriate unit for display
+        if (unit.includes('Bq')) {
+            if (rate >= 1e6) return `${(rate/1e6).toFixed(2)} PBq/day`;
+            if (rate >= 1e3) return `${(rate/1e3).toFixed(2)} TBq/day`;
+            return `${rate.toFixed(2)} GBq/day`;
+        }
+        if (unit === 'tons') {
+            return `${rate.toFixed(2)} tons/day`;
+        }
+        return `${rate.toFixed(2)} kg/day`;
+    }
+
+    formatTotal(total) {
+        if (total > 1e12) return `${(total/1e12).toFixed(2)} PBq`;
+        if (total > 1e9) return `${(total/1e9).toFixed(2)} TBq`;
+        if (total > 1e6) return `${(total/1e6).toFixed(2)} GBq`;
+        if (total > 1000) return `${(total/1000).toFixed(2)} tons`;
+        return `${total.toFixed(2)} kg`;
+    }
+}
+
+// ==================== PARTICLE ENGINE 3D ====================
 
 class ParticleEngine3D {
-    constructor(numParticles = 10000) {
-        console.log('🚀 Creating ParticleEngine3D 3D Physics');
+    constructor(numParticles = 10000, tracerId = 'cs137', startLocation = null) {
+        console.log('🚀 Creating ParticleEngine3D with Multi-Tracer Support');
 
         // ===== LOADERS =====
         this.hycomLoader = window.streamingHycomLoader3D;
         this.ekeLoader = window.streamingEkeLoader;
 
-        // ===== FUKUSHIMA & GRID =====
-        this.FUKUSHIMA_LON = 141.31;
-        this.FUKUSHIMA_LAT = 37.42;
-        this.LON_SCALE = 88.8;   // km/degree longitude at ~37°N
-        this.LAT_SCALE = 111.0;  // km/degree latitude
+        // ===== COORDINATE SYSTEM =====
+        // Use provided location or default to Fukushima
+        if (startLocation) {
+            this.REFERENCE_LON = startLocation.lon;
+            this.REFERENCE_LAT = startLocation.lat;
+        } else {
+            this.REFERENCE_LON = 142.03;  // Default Fukushima longitude
+            this.REFERENCE_LAT = 37.42;   // Default Fukushima latitude
+        }
 
-        // ===== SCIENTIFIC CALIBRATION (16.2 PBq) =====
-        this.TOTAL_RELEASED_PBq = 16.2;
-        this.TOTAL_RELEASED_Bq = this.TOTAL_RELEASED_PBq * 1e15;
+        this.LON_SCALE = 88.8;        // km/degree at reference latitude
+        this.LAT_SCALE = 111.0;       // km/degree
+
+        // ===== TRACER CONFIGURATION =====
+        this.tracerId = tracerId;
+        this.tracer = TracerLibrary[tracerId] || TracerLibrary.cs137;
+        this.releaseManager = new ReleaseManager(tracerId);
+
+        // ===== PARTICLE COUNT =====
         this.particleCount = numParticles;
-        this.Bq_PER_PARTICLE = this.TOTAL_RELEASED_Bq / this.particleCount;
-        this.GBq_PER_PARTICLE = this.Bq_PER_PARTICLE / 1e9;
+        this.calculateParticleCalibration();
 
-        console.log(`📊 CALIBRATION: Each particle = ${this.GBq_PER_PARTICLE.toFixed(1)} GBq`);
+        console.log(`🧪 Tracer: ${this.tracer.name} (${this.tracer.type})`);
+        console.log(`📊 Each particle = ${this.UNITS_PER_PARTICLE?.toExponential(2) || 'N/A'} ${this.tracer.units}`);
 
-        // ===== LAND INTERACTION SETTINGS =====
+        // ===== LAND INTERACTION =====
         this.landSettings = {
             enabled: true,
             coastalPushStrength: 3.0,
@@ -47,8 +366,6 @@ class ParticleEngine3D {
         this.params = {
             diffusivityScale: 1.0,
             simulationSpeed: 1.0,
-            decayEnabled: true,
-            lagrangianTimescale: 7,
             verticalMixing: true,
             ekmanPumping: 5e-6,
             convectiveMixing: 2e-6
@@ -59,56 +376,6 @@ class ParticleEngine3D {
             mixedLayer: { depth: 50, kz: 0.01 },
             upperOcean: { depth: 200, kz: 0.0001 },
             deepOcean: { depth: 1000, kz: 0.00005 }
-        };
-
-        // ===== ISOTOPE DATA =====
-        this.isotopes = {
-            'Cs137': {
-                name: 'Cesium-137',
-                halfLifeDays: 30.17 * 365.25,
-                color: '#FF6B6B',
-                initialMass: 1.0
-            }
-        };
-
-        // ===== RELEASE PHASES (adjusted for 16.2 PBq) =====
-        this.releasePhases = [
-            {
-                startDay: 10,
-                endDay: 80,
-                label: 'Major Leak Events (Mar-May 2011)',
-                totalActivityPBq: 13.77, // 85% of 16.2
-            },
-            {
-                startDay: 81,
-                endDay: 172,
-                label: 'Steady Continuous Release (Summer 2011)',
-                dailyRateGBq: 17800, // Adjusted for 1.62 PBq
-            },
-            {
-                startDay: 173,
-                endDay: 385,
-                label: 'Declining Continuous Release',
-                dailyRateGBq: 3060, // Adjusted for 0.648 PBq
-            },
-            {
-                startDay: 386,
-                endDay: 568,
-                label: 'Low-Level Continuous Release (2012)',
-                dailyRateGBq: 890, // Adjusted for 0.162 PBq
-            }
-        ];
-
-        // Calculate Phase 1 daily rate
-        const phase1 = this.releasePhases[0];
-        phase1.dailyRateGBq = (phase1.totalActivityPBq * 1e6) / (phase1.endDay - phase1.startDay);
-
-        // ===== CONCENTRATION PARAMETERS (YOUR ORIGINAL WORKING VALUES) =====
-        this.concentrationScale = 1000;
-        this.activityToParticleScale = 0.001;
-        this.constantSigma = {
-            horizontal: 10000,
-            vertical: 50
         };
 
         // ===== SIMULATION STATE =====
@@ -133,7 +400,17 @@ class ParticleEngine3D {
         this.particlePool = [];
         this.initializeParticlePool(numParticles);
 
-        console.log('✅ ParticleEngine3D initialized (Original Working Version)');
+        console.log('✅ ParticleEngine3D initialized');
+    }
+
+    calculateParticleCalibration() {
+        const totalRelease = this.releaseManager.getTotalRelease();
+
+        if (totalRelease > 0) {
+            this.UNITS_PER_PARTICLE = this.releaseManager.getParticleActivity(this.particleCount);
+        } else {
+            this.UNITS_PER_PARTICLE = 1;
+        }
     }
 
     // ==================== INITIALIZATION ====================
@@ -153,7 +430,6 @@ class ParticleEngine3D {
             }
 
             await this.hycomLoader.loadDayByOffset(0);
-
             console.log('✅ All loaders ready');
             return true;
 
@@ -161,6 +437,14 @@ class ParticleEngine3D {
             console.error('❌ Initialization failed:', error);
             return false;
         }
+    }
+    setReleaseLocation(lat, lon) {
+        this.REFERENCE_LAT = lat;
+        this.REFERENCE_LON = lon;
+        console.log(`📍 Release location updated to: ${lat}°N, ${lon}°E`);
+
+        // Optional: Reset simulation if needed
+        // this.resetSimulation();
     }
 
     initializeParticlePool(numParticles) {
@@ -170,21 +454,17 @@ class ParticleEngine3D {
             this.particlePool.push({
                 id: i,
                 active: false,
-                isotope: 'Cs137',
+                tracerId: this.tracerId,
                 x: 0,
                 y: 0,
                 depth: 0,
-                sigma_h: 100,
-                sigma_v: 10,
                 concentration: 0,
                 age: 0,
-                mass: 1.0,
-                releaseDepth: 0,
+                mass: this.UNITS_PER_PARTICLE || 1.0,
                 history: [],
                 velocityU: 0,
                 velocityV: 0,
-                lastIntegration: 'none',
-                integrationSteps: 0
+                lastIntegration: 'none'
             });
         }
     }
@@ -204,14 +484,6 @@ class ParticleEngine3D {
         if (this.stats.totalReleased === 0) {
             this.currentSimulationTime = new Date(this.simulationStartTime);
             this.stats.simulationDays = 0;
-
-            const initialActivityPBq = 2.0;
-            const initialParticles = Math.floor(initialActivityPBq * 1e6 * this.activityToParticleScale);
-
-            if (initialParticles > 0) {
-                const released = this.releaseParticles(initialParticles);
-                console.log(`📈 Released ${released} particles for early March (11-21, 2011)`);
-            }
         }
     }
 
@@ -228,14 +500,8 @@ class ParticleEngine3D {
         this.lastUpdateTime = Date.now();
     }
 
-    stopSimulation() {
-        console.log('⏹️ Stopping simulation');
-        this.isRunning = false;
-    }
-
     resetSimulation() {
         console.log('🔄 Resetting simulation');
-
         this.isRunning = false;
         this.currentSimulationTime = new Date(this.simulationStartTime);
         this.stats = {
@@ -255,27 +521,40 @@ class ParticleEngine3D {
             p.y = 0;
             p.depth = 0;
             p.age = 0;
-            p.mass = 1.0;
+            p.mass = this.UNITS_PER_PARTICLE || 1.0;
             p.concentration = 0;
             p.history = [];
             p.velocityU = 0;
             p.velocityV = 0;
-            p.lastIntegration = 'none';
-            p.integrationSteps = 0;
         }
     }
 
     // ==================== PARTICLE RELEASE ====================
 
-    releaseParticles(count) {
+    async releaseParticles(count) {
         let released = 0;
-        const RELEASE_CENTER = { lon: 142.31, lat: 37.42 };
+        const RELEASE_CENTER = {
+            lon: this.REFERENCE_LON,
+            lat: this.REFERENCE_LAT
+        };
         const SIGMA = 30.0 / this.LON_SCALE;
+        const MAX_ATTEMPTS = 1000; // Prevent infinite loops
+        const MIN_DISTANCE_FROM_LAND_KM = 10; // 10km minimum distance
 
         for (const p of this.particlePool) {
             if (!p.active && released < count) {
                 let lon, lat;
+                let attempts = 0;
+                let isOcean = false;
+                let distanceFromLand = 0;
+
                 do {
+                    attempts++;
+                    if (attempts > MAX_ATTEMPTS) {
+                        console.warn(`⚠️ Could not find ocean location after ${MAX_ATTEMPTS} attempts`);
+                        return released;
+                    }
+
                     const u1 = Math.random();
                     const u2 = Math.random();
                     const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
@@ -289,16 +568,53 @@ class ParticleEngine3D {
                     lat = Math.max(RELEASE_CENTER.lat - SIGMA * 3,
                                  Math.min(RELEASE_CENTER.lat + SIGMA * 3, lat));
 
-                } while (!this.isPositionInOcean(lon, lat));
+                    // Check if in ocean
+                    if (this.hycomLoader) {
+                        try {
+                            // Use isOcean method with current simulation day
+                            isOcean = await this.hycomLoader.isOcean(lon, lat, 0, this.stats.simulationDays);
 
-                p.x = (lon - this.FUKUSHIMA_LON) * this.LON_SCALE;
-                p.y = (lat - this.FUKUSHIMA_LAT) * this.LAT_SCALE;
+                            // If it's ocean, check distance from land (simplified)
+                            if (isOcean) {
+                                // Find nearest ocean cell to check distance
+                                const oceanCell = await this.hycomLoader.findNearestOceanCell(
+                                    lon, lat, 0, this.stats.simulationDays, 5
+                                );
+
+                                if (oceanCell && oceanCell.distance) {
+                                    // Convert distance from degrees to km (approx)
+                                    // 1 degree lat ≈ 111 km, 1 degree lon ≈ 88.8 km at 37°N
+                                    const latKmPerDegree = 111;
+                                    const lonKmPerDegree = 88.8;
+
+                                    // Approximate distance in km
+                                    distanceFromLand = Math.sqrt(
+                                        Math.pow(oceanCell.distance * latKmPerDegree, 2) +
+                                        Math.pow(oceanCell.distance * lonKmPerDegree, 2)
+                                    );
+
+                                    if (distanceFromLand < MIN_DISTANCE_FROM_LAND_KM) {
+                                        isOcean = false; // Too close to land
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('Ocean check failed:', e);
+                            isOcean = true; // Default to true if check fails
+                        }
+                    } else {
+                        isOcean = true; // No loader, assume ocean
+                    }
+
+                } while (!isOcean);
+
+                p.x = (lon - this.REFERENCE_LON) * this.LON_SCALE;
+                p.y = (lat - this.REFERENCE_LAT) * this.LAT_SCALE;
                 p.depth = 0;
-                p.sigma_h = this.constantSigma.horizontal;
-                p.sigma_v = this.constantSigma.vertical;
                 p.active = true;
                 p.age = 0;
-                p.mass = 1.0;
+                p.mass = this.UNITS_PER_PARTICLE || 1.0;
+                p.tracerId = this.tracerId;
                 p.concentration = this.calculateConcentration(p);
                 p.releaseDay = this.stats.simulationDays;
                 p.history = [{x: p.x, y: p.y, depth: p.depth}];
@@ -309,13 +625,14 @@ class ParticleEngine3D {
 
         this.stats.totalReleased += released;
         if (released > 0) {
-            console.log(`🎯 Released ${released} particles`);
+            console.log(`🎯 Released ${released} particles at ${RELEASE_CENTER.lat}°N, ${RELEASE_CENTER.lon}°E (${MIN_DISTANCE_FROM_LAND_KM}km from land)`);
         }
 
         return released;
     }
 
     isPositionInOcean(lon, lat, depthMeters = 0) {
+        // Simplified - actual land checking happens in hycomLoader
         return true;
     }
 
@@ -325,18 +642,52 @@ class ParticleEngine3D {
         if (!this.isRunning) return;
 
         const currentSimDay = this.stats.simulationDays;
-        let totalParticlesToRelease = 0;
 
-        for (const phase of this.releasePhases) {
-            if (currentSimDay >= phase.startDay && currentSimDay <= phase.endDay) {
-                const particlesThisStep = phase.dailyRateGBq * this.activityToParticleScale * deltaDays;
-                totalParticlesToRelease += particlesThisStep;
+        // Find active phase
+        let activePhase = null;
+        for (const phase of this.releaseManager.phases) {
+            if (currentSimDay >= phase.start && currentSimDay <= phase.end) {
+                activePhase = phase;
+                break;
             }
         }
 
-        if (totalParticlesToRelease > 0) {
-            const count = Math.floor(totalParticlesToRelease);
-            this.releaseParticles(count);
+        if (activePhase && this.UNITS_PER_PARTICLE) {
+            const rate = activePhase.getRate();
+
+            // CRITICAL: Convert rate to base units (GBq)
+            let rateInBase = rate;
+            if (activePhase.unit === 'PBq') {
+                rateInBase = rate * 1e6;  // PBq/day → GBq/day
+                console.log('🔄 Converting PBq to GBq:', { original: rate, converted: rateInBase });
+            } else if (activePhase.unit === 'TBq') {
+                rateInBase = rate * 1000;   // TBq/day → GBq/day
+            }
+            // GBq stays as-is
+
+            const particlesPerDay = rateInBase / this.UNITS_PER_PARTICLE;
+            const particlesThisStep = particlesPerDay * deltaDays;
+
+            console.log('📊 Release calculation:', {
+                phaseUnit: activePhase.unit,
+                originalRate: rate,
+                rateInBase,
+                unitsPerParticle: this.UNITS_PER_PARTICLE,
+                particlesPerDay,
+                particlesThisStep,
+                deltaDays
+            });
+
+            // Accumulate fractional particles
+            if (!this.particleFraction) this.particleFraction = 0;
+            this.particleFraction += particlesThisStep;
+
+            const wholeParticles = Math.floor(this.particleFraction);
+            if (wholeParticles >= 1) {
+                this.particleFraction -= wholeParticles;
+                console.log(`🎯 Releasing ${wholeParticles} particles at day ${currentSimDay.toFixed(2)}`);
+                this.releaseParticles(wholeParticles);
+            }
         }
     }
 
@@ -345,85 +696,66 @@ class ParticleEngine3D {
     async checkLandInteraction(p, prevX, prevY, prevDepth, currentSimDay) {
         if (!this.landSettings.enabled || !this.hycomLoader) return false;
 
-        const lon = this.FUKUSHIMA_LON + (p.x / this.LON_SCALE);
-        const lat = this.FUKUSHIMA_LAT + (p.y / this.LAT_SCALE);
+        const lon = this.REFERENCE_LON + (p.x / this.LON_SCALE);
+        const lat = this.REFERENCE_LAT + (p.y / this.LAT_SCALE);
         const depthMeters = p.depth * 1000;
 
         try {
-            // Check if current position is ocean
             const isOcean = await this.hycomLoader.isOcean(lon, lat, depthMeters, currentSimDay);
 
             if (!isOcean) {
-                // 1. First try: revert to previous position
                 p.x = prevX;
                 p.y = prevY;
                 p.depth = prevDepth;
 
-                // 2. Second try: find nearest ocean cell
                 const oceanCell = await this.hycomLoader.findNearestOceanCell(
                     lon, lat, depthMeters, currentSimDay, this.landSettings.maxLandSearchRadius
                 );
 
                 if (oceanCell) {
-                    // Calculate direction to ocean
-                    const targetX = (oceanCell.lon - this.FUKUSHIMA_LON) * this.LON_SCALE;
-                    const targetY = (oceanCell.lat - this.FUKUSHIMA_LAT) * this.LAT_SCALE;
+                    const targetX = (oceanCell.lon - this.REFERENCE_LON) * this.LON_SCALE;
+                    const targetY = (oceanCell.lat - this.REFERENCE_LAT) * this.LAT_SCALE;
 
                     const dx = targetX - prevX;
                     const dy = targetY - prevY;
                     const dist = Math.sqrt(dx * dx + dy * dy);
 
                     if (dist > 0) {
-                        // Move partially toward ocean (50% of distance)
                         const moveFraction = 0.5;
                         p.x = prevX + dx * moveFraction;
                         p.y = prevY + dy * moveFraction;
-
-                        // Also adjust depth toward surface
-                        if (oceanCell.actualDepth !== undefined) {
-                            p.depth = Math.min(p.depth, oceanCell.actualDepth / 1000 * 0.8);
-                        }
                     }
                 }
-
-                return true; // Particle was on land
+                return true;
             }
-
-            return false; // Particle is in ocean
+            return false;
 
         } catch (error) {
-            console.warn(`Land check failed for particle ${p.id}:`, error);
-            // On error, revert to previous position to be safe
             p.x = prevX;
             p.y = prevY;
             p.depth = prevDepth;
             return true;
         }
     }
-        // Add this new method to ParticleEngine3D class
+
     async _checkPathToOcean(startX, startY, endX, endY, depth, currentSimDay) {
-        const steps = 2; // Check 5 points along the path
+        const steps = 2;
         const stepX = (endX - startX) / steps;
         const stepY = (endY - startY) / steps;
 
         for (let s = 1; s <= steps; s++) {
             const testX = startX + stepX * s;
             const testY = startY + stepY * s;
-
-            const testLon = this.FUKUSHIMA_LON + (testX / this.LON_SCALE);
-            const testLat = this.FUKUSHIMA_LAT + (testY / this.LAT_SCALE);
-
-            // Check if this point is ocean
+            const testLon = this.REFERENCE_LON + (testX / this.LON_SCALE);
+            const testLat = this.REFERENCE_LAT + (testY / this.LAT_SCALE);
             const isOcean = await this.hycomLoader.isOcean(testLon, testLat, depth * 1000, currentSimDay);
 
             if (!isOcean) {
-                // Found land along the path - return the last valid position
                 const safeX = startX + stepX * (s - 1);
                 const safeY = startY + stepY * (s - 1);
                 return { safe: false, lastValidX: safeX, lastValidY: safeY };
             }
         }
-
         return { safe: true, lastValidX: endX, lastValidY: endY };
     }
 
@@ -431,66 +763,40 @@ class ParticleEngine3D {
 
     async applyDiffusion(p, deltaDays, currentSimDay) {
         try {
-            const lon = this.FUKUSHIMA_LON + (p.x / this.LON_SCALE);
-            const lat = this.FUKUSHIMA_LAT + (p.y / this.LAT_SCALE);
-
+            const lon = this.REFERENCE_LON + (p.x / this.LON_SCALE);
+            const lat = this.REFERENCE_LAT + (p.y / this.LAT_SCALE);
             const ekeResult = await this.ekeLoader.getDiffusivityAt(lon, lat, currentSimDay);
 
-            let K_m2_s;
-            if (ekeResult.found) {
-                K_m2_s = ekeResult.K * this.params.diffusivityScale;
-            } else {
-                K_m2_s = 20 * this.params.diffusivityScale;
-            }
+            let K_m2_s = ekeResult.found ?
+                ekeResult.K * this.params.diffusivityScale * (this.tracer.behavior.diffusivityScale || 1.0) :
+                20 * this.params.diffusivityScale;
 
-            // Convert time step to seconds
             const dtSeconds = deltaDays * 86400;
-
-            // Calculate displacement in meters (standard random walk formula)
             const stepScale_m = Math.sqrt(2 * K_m2_s * dtSeconds);
-
-            // Convert to kilometers for your coordinate system
             const stepScale_km = stepScale_m / 1000;
 
-            // Generate random displacements
-            const randX = this.gaussianRandom();
-            const randY = this.gaussianRandom();
-            const dx = stepScale_km * randX;
-            const dy = stepScale_km * randY;
-            const distance = Math.sqrt(dx*dx + dy*dy);
-
-            // Store pre-move position
-            const prevX = p.x;
-            const prevY = p.y;
-
-            // Apply movement
-            p.x += dx;
-            p.y += dy;
+            p.x += stepScale_km * this.gaussianRandom();
+            p.y += stepScale_km * this.gaussianRandom();
 
         } catch (error) {
-            console.error(`❌ Diffusion error for particle ${p.id}:`, error);
+            console.error(`❌ Diffusion error:`, error);
         }
     }
 
     // ==================== VERTICAL MOTION ====================
 
-    applyVerticalMotion(p, dtSeconds, currentSimDay) {
+    applyVerticalMotion(p, dtSeconds) {
+        const settling = this.tracer.behavior.settlingVelocity || 0;
         const depthM = p.depth * 1000;
         const kz = this.getVerticalDiffusivity(depthM);
 
         const verticalStdDev = Math.sqrt(2 * kz * dtSeconds);
         const randomDz = verticalStdDev * this.gaussianRandom();
 
-        let deterministicDz = 0;
-        deterministicDz += this.params.ekmanPumping * dtSeconds;
+        // Deterministic settling/buoyancy
+        const settlingDz = settling * dtSeconds / 86400; // Convert to per second
 
-        const dayOfYear = this.getDayOfYear();
-        const isWinter = dayOfYear < 90 || dayOfYear > 335;
-        if (isWinter && depthM < 100) {
-            deterministicDz += this.params.convectiveMixing * dtSeconds;
-        }
-
-        p.depth += (randomDz + deterministicDz) / 1000;
+        p.depth += (randomDz + settlingDz) / 1000;
         p.depth = Math.max(0, Math.min(p.depth, 1.0));
 
         const currentDepthM = p.depth * 1000;
@@ -509,21 +815,91 @@ class ParticleEngine3D {
         }
     }
 
-    // ==================== CONCENTRATION CALCULATION (YOUR ORIGINAL) ====================
+    // ==================== CONCENTRATION CALCULATIONS ====================
 
     calculateConcentration(p) {
-        const M = p.mass * 1e9;
-        const volume = Math.pow(2 * Math.PI, 1.5) *
-                       this.constantSigma.horizontal *
-                       this.constantSigma.horizontal *
-                       this.constantSigma.vertical;
+        if (!p.tracerId) return 0;
 
-        let concentration = M / Math.max(volume, 1e9);
-        concentration *= this.concentrationScale;
-        concentration = Math.max(concentration, 1e-6);
-        concentration = Math.min(concentration, 1e6);
+        const tracer = TracerLibrary[p.tracerId] || this.tracer;
+        const sigmaH = tracer.behavior.sigmaH || 10000;
+        const sigmaV = tracer.behavior.sigmaV || 50;
+
+        const volume = Math.pow(2 * Math.PI, 1.5) * sigmaH * sigmaH * sigmaV;
+
+        switch(tracer.type) {
+            case 'radionuclide':
+                return this.calcRadionuclideConcentration(p, tracer, volume);
+            case 'hydrocarbon':
+                return this.calcHydrocarbonConcentration(p, tracer, volume);
+            case 'particulate':
+                return this.calcParticulateConcentration(p, tracer, volume);
+            case 'pollutant':
+                return this.calcPollutantConcentration(p, tracer, volume);
+            case 'biological':
+                return this.calcBiologicalConcentration(p, tracer, volume);
+            default:
+                return p.mass / Math.max(volume, 1e9);
+        }
+        console.log('🔬 Concentration debug:', {
+            mass: p.mass,
+            massUnits: 'Bq?',
+            sigmaH: sigmaH,
+            sigmaV: sigmaV,
+            volume: volume,
+            rawConc: mass / volume,
+            formatted: formatConcentration(mass / volume)
+        });
+    }
+
+    calcRadionuclideConcentration(p, tracer, volume) {
+        let mass = p.mass;
+        if (tracer.behavior.decay && tracer.halfLife) {
+            mass *= Math.pow(0.5, p.age / tracer.halfLife);
+        }
+
+        const concentration = mass / Math.max(volume, 1e9);
+
+        // ===== ADD THIS DEBUG =====
+        if (p.id < 5) {
+            console.log('🔬 RADIONUCLIDE:', {
+                mass,
+                volume: volume.toExponential(2),
+                concentration: concentration.toExponential(4)
+            });
+        }
 
         return concentration;
+    }
+
+    calcHydrocarbonConcentration(p, tracer, volume) {
+        let mass = p.mass;
+        if (tracer.behavior.evaporation) {
+            mass *= Math.exp(-tracer.behavior.evaporation * p.age / 30); // Monthly decay
+        }
+
+        if (p.depth < 0.01) { // Surface slick
+            const slickThickness = 0.001; // 1mm
+            const area = volume / slickThickness;
+            return mass / area; // kg/m²
+        } else {
+            const concentration = mass / volume; // kg/m³
+            const waterDensity = 1000;
+            return (concentration / waterDensity) * 1e6; // ppm
+        }
+    }
+
+    calcParticulateConcentration(p, tracer, volume) {
+        const concentration = p.mass / volume; // kg/m³
+        return concentration * 1000; // mg/L
+    }
+
+    calcPollutantConcentration(p, tracer, volume) {
+        const waterMass = volume * 1000; // kg
+        return (p.mass / waterMass) * 1e9; // ppb
+    }
+
+    calcBiologicalConcentration(p, tracer, volume) {
+        return p.mass / volume; // organisms/m³
     }
 
     // ==================== MAIN UPDATE LOOP ====================
@@ -550,7 +926,8 @@ class ParticleEngine3D {
         if (!this.isRunning) return;
         const activeParticles = this.getActiveParticles();
         if (activeParticles.length === 0) return;
-        this.stats.particlesOnLand = 0;  // Reset each frame
+
+        this.stats.particlesOnLand = 0;
         const currentSimDay = this.stats.simulationDays;
         const dtSeconds = deltaDays * 86400;
 
@@ -572,10 +949,9 @@ class ParticleEngine3D {
                 if (this.rk4Enabled && this.rk4Settings.enabled) {
                     const rk4Result = await this.rk4Integrate(p, deltaDays, currentSimDay);
 
-                    // Check if RK4 path is safe
                     const pathCheck = await this._checkPathToOcean(
                         prevX, prevY, rk4Result.x, rk4Result.y,
-                        p.depth, currentSimDay
+                        p.depth, currentSimDay, 5
                     );
 
                     if (pathCheck.safe) {
@@ -586,51 +962,41 @@ class ParticleEngine3D {
                         p.velocityV = rk4Result.v_avg || 0;
                         p.lastIntegration = 'rk4';
                     } else {
-                        // Stop at last valid position
                         p.x = pathCheck.lastValidX;
                         p.y = pathCheck.lastValidY;
                         p.velocityU = 0;
                         p.velocityV = 0;
                     }
-                } else {
-                    if (velocity.found) {
-                        const newX = p.x + velocity.u * 86.4 * deltaDays;
-                        const newY = p.y + velocity.v * 86.4 * deltaDays;
+                } else if (velocity.found) {
+                    // Euler integration (your existing code)
+                    const newX = p.x + velocity.u * 86.4 * deltaDays;
+                    const newY = p.y + velocity.v * 86.4 * deltaDays;
 
-                        // Check if path is safe
-                        const pathCheck = await this._checkPathToOcean(
-                            prevX, prevY, newX, newY, p.depth, currentSimDay
-                        );
+                    const pathCheck = await this._checkPathToOcean(
+                        prevX, prevY, newX, newY, p.depth, currentSimDay, 5
+                    );
 
-                        if (pathCheck.safe) {
-                            p.x = newX;
-                            p.y = newY;
-                            p.velocityU = velocity.u;
-                            p.velocityV = velocity.v;
-                        } else {
-                            p.x = pathCheck.lastValidX;
-                            p.y = pathCheck.lastValidY;
-                            p.velocityU = 0;
-                            p.velocityV = 0;
-                        }
+                    if (pathCheck.safe) {
+                        p.x = newX;
+                        p.y = newY;
+                        p.velocityU = velocity.u;
+                        p.velocityV = velocity.v;
+                    } else {
+                        p.x = pathCheck.lastValidX;
+                        p.y = pathCheck.lastValidY;
                     }
-                    p.lastIntegration = 'euler';
                 }
-
                 // ===== 2. DIFFUSION =====
                 if (this.ekeLoader && this.params.diffusivityScale > 0.01) {
                     const beforeDiffX = p.x;
                     const beforeDiffY = p.y;
-
                     await this.applyDiffusion(p, deltaDays, currentSimDay);
 
-                    // Check if diffusion path is safe
                     const diffPathCheck = await this._checkPathToOcean(
                         beforeDiffX, beforeDiffY, p.x, p.y, p.depth, currentSimDay
                     );
 
                     if (!diffPathCheck.safe) {
-                        // Revert to position before diffusion
                         p.x = beforeDiffX;
                         p.y = beforeDiffY;
                     }
@@ -645,20 +1011,15 @@ class ParticleEngine3D {
 
                 // ===== 4. VERTICAL MOTION =====
                 if (this.params.verticalMixing) {
-                    this.applyVerticalMotion(p, dtSeconds, currentSimDay);
+                    this.applyVerticalMotion(p, dtSeconds);
                 }
 
-                // ===== 5. RADIOACTIVE DECAY =====
+                // ===== 5. DECAY/AGING =====
                 p.age += deltaDays;
-                if (this.params.decayEnabled) {
-                    const halfLife = this.isotopes.Cs137.halfLifeDays;
-                    p.mass *= Math.pow(0.5, deltaDays / halfLife);
 
-                    if (p.mass < 0.001) {
-                        p.active = false;
-                        this.stats.totalDecayed++;
-                        continue;
-                    }
+                // Tracer-specific mass loss (evaporation, etc.)
+                if (this.tracer.behavior.evaporation && this.tracer.type !== 'radionuclide') {
+                    p.mass *= Math.exp(-this.tracer.behavior.evaporation * deltaDays / 30);
                 }
 
                 // ===== 6. UPDATE CONCENTRATION =====
@@ -678,22 +1039,153 @@ class ParticleEngine3D {
         }
 
         this.stats.activeParticles = this.getActiveParticles().length;
-
-        if (Math.floor(this.stats.simulationDays) !== Math.floor(this.stats.simulationDays - deltaDays)) {
-            this.logStatistics();
-        }
     }
 
     // ==================== VELOCITY METHODS ====================
 
+    async rk4Integrate(p, deltaDays, currentSimDay) {
+        const h = this.calculateOptimalStepSize(p, deltaDays);
+        const steps = Math.ceil(deltaDays / h);
+        const actualStep = deltaDays / steps;
+
+        let x = p.x;
+        let y = p.y;
+        let depth = p.depth;
+        let totalU = 0;
+        let totalV = 0;
+
+        for (let step = 0; step < steps; step++) {
+            const stepTime = currentSimDay + step * actualStep;
+            const result = await this.rk4Step(x, y, depth, actualStep, stepTime);
+
+            if (!result.success) {
+                return await this.eulerIntegrate(p, deltaDays, currentSimDay);
+            }
+
+            x = result.x;
+            y = result.y;
+            depth = result.depth;
+            totalU += result.u_avg;
+            totalV += result.v_avg;
+        }
+
+        return {
+            x, y, depth,
+            u_avg: totalU / steps,
+            v_avg: totalV / steps,
+            stepsTaken: steps
+        };
+    }
+
+    async rk4Step(x, y, depth, h, currentTime) {
+        try {
+            const depthMeters = depth * 1000;
+
+            const lon1 = this.REFERENCE_LON + (x / this.LON_SCALE);
+            const lat1 = this.REFERENCE_LAT + (y / this.LAT_SCALE);
+            const k1 = await this.getVelocityAt(lon1, lat1, depthMeters, currentTime);
+
+            if (!k1.found) return { success: false };
+
+            const x2 = x + h/2 * k1.u * 86.4;
+            const y2 = y + h/2 * k1.v * 86.4;
+            const lon2 = this.REFERENCE_LON + (x2 / this.LON_SCALE);
+            const lat2 = this.REFERENCE_LAT + (y2 / this.LAT_SCALE);
+            const k2 = await this.getVelocityAt(lon2, lat2, depthMeters, currentTime + h/2);
+
+            const x3 = x + h/2 * (k2.found ? k2.u : k1.u) * 86.4;
+            const y3 = y + h/2 * (k2.found ? k2.v : k1.v) * 86.4;
+            const lon3 = this.REFERENCE_LON + (x3 / this.LON_SCALE);
+            const lat3 = this.REFERENCE_LAT + (y3 / this.LAT_SCALE);
+            const k3 = await this.getVelocityAt(lon3, lat3, depthMeters, currentTime + h/2);
+
+            const x4 = x + h * (k3.found ? k3.u : k1.u) * 86.4;
+            const y4 = y + h * (k3.found ? k3.v : k1.v) * 86.4;
+            const lon4 = this.REFERENCE_LON + (x4 / this.LON_SCALE);
+            const lat4 = this.REFERENCE_LAT + (y4 / this.LAT_SCALE);
+            const k4 = await this.getVelocityAt(lon4, lat4, depthMeters, currentTime + h);
+
+            const u_avg = (1/6) * (
+                k1.u +
+                2 * (k2.found ? k2.u : k1.u) +
+                2 * (k3.found ? k3.u : k1.u) +
+                (k4.found ? k4.u : k1.u)
+            );
+
+            const v_avg = (1/6) * (
+                k1.v +
+                2 * (k2.found ? k2.v : k1.v) +
+                2 * (k3.found ? k3.v : k1.v) +
+                (k4.found ? k4.v : k1.v)
+            );
+
+            return {
+                success: true,
+                x: x + h * u_avg * 86.4,
+                y: y + h * v_avg * 86.4,
+                depth: depth,
+                u_avg, v_avg
+            };
+
+        } catch (error) {
+            return { success: false };
+        }
+    }
+
+    calculateOptimalStepSize(p, totalDeltaDays) {
+        if (!this.rk4Settings.adaptiveStepSize) {
+            return Math.min(totalDeltaDays, this.rk4Settings.maxStepSize);
+        }
+
+        const speed = Math.sqrt(p.velocityU * p.velocityU + p.velocityV * p.velocityV);
+        const characteristicTime = 1.0 / (speed + 0.001);
+
+        let optimalStep = Math.min(
+            characteristicTime * this.rk4Settings.timeStepSafety,
+            this.rk4Settings.maxStepSize
+        );
+
+        optimalStep = Math.max(optimalStep, this.rk4Settings.minStepSize);
+        optimalStep = Math.min(optimalStep, totalDeltaDays);
+
+        return optimalStep;
+    }
+
+    async eulerIntegrate(p, deltaDays, currentSimDay) {
+        const lon = this.REFERENCE_LON + (p.x / this.LON_SCALE);
+        const lat = this.REFERENCE_LAT + (p.y / this.LAT_SCALE);
+        const depthMeters = p.depth * 1000;
+
+        const velocity = await this.getVelocityAt(lon, lat, depthMeters, currentSimDay);
+
+        if (velocity.found) {
+            return {
+                x: p.x + deltaDays * velocity.u * 86.4,
+                y: p.y + deltaDays * velocity.v * 86.4,
+                depth: p.depth,
+                u_avg: velocity.u,
+                v_avg: velocity.v
+            };
+        }
+
+        return {
+            x: p.x,
+            y: p.y,
+            depth: p.depth,
+            u_avg: 0,
+            v_avg: 0
+        };
+    }
+
+    // ==================== ENHANCED VELOCITY METHODS ====================
     async getVelocitiesForGroup(particles, targetDepth, simulationDay) {
         if (!this.hycomLoader) {
             return particles.map(() => ({ u: 0, v: 0, found: false }));
         }
 
         const positions = particles.map(p => ({
-            lon: this.FUKUSHIMA_LON + (p.x / this.LON_SCALE),
-            lat: this.FUKUSHIMA_LAT + (p.y / this.LAT_SCALE)
+            lon: this.REFERENCE_LON + (p.x / this.LON_SCALE),  // <-- FIXED
+            lat: this.REFERENCE_LAT + (p.y / this.LAT_SCALE)   // <-- FIXED
         }));
 
         try {
@@ -707,7 +1199,6 @@ class ParticleEngine3D {
             return particles.map(() => ({ u: 0, v: 0, found: false }));
         }
     }
-
     async getVelocityAt(lon, lat, depthMeters, simDay) {
         if (!this.hycomLoader) {
             return { u: 0, v: 0, found: false };
@@ -730,6 +1221,111 @@ class ParticleEngine3D {
         } catch (error) {
             return { u: 0, v: 0, found: false };
         }
+    }
+
+    // ==================== ENHANCED VERTICAL MOTION ====================
+
+    applyVerticalMotion(p, dtSeconds, currentSimDay) {
+        const settling = this.tracer.behavior.settlingVelocity || 0;
+        const depthM = p.depth * 1000;
+        const kz = this.getVerticalDiffusivity(depthM);
+
+        const verticalStdDev = Math.sqrt(2 * kz * dtSeconds);
+        const randomDz = verticalStdDev * this.gaussianRandom();
+
+        // Deterministic settling/buoyancy
+        const settlingDz = settling * dtSeconds / 86400; // Convert to per second
+
+        // RESTORED: Ekman pumping and convective mixing
+        let deterministicDz = 0;
+        deterministicDz += this.params.ekmanPumping * dtSeconds;
+
+        const dayOfYear = this.getDayOfYear();
+        const isWinter = dayOfYear < 90 || dayOfYear > 335;
+        if (isWinter && depthM < 100) {
+            deterministicDz += this.params.convectiveMixing * dtSeconds;
+        }
+
+        p.depth += (randomDz + settlingDz + deterministicDz) / 1000;
+        p.depth = Math.max(0, Math.min(p.depth, 1.0));
+
+        const currentDepthM = p.depth * 1000;
+        if (currentDepthM > this.stats.maxDepthReached) {
+            this.stats.maxDepthReached = currentDepthM;
+        }
+    }
+
+    // ==================== STATISTICS (RESTORED) ====================
+
+    logStatistics() {
+        const activeParticles = this.getActiveParticles();
+        if (activeParticles.length === 0) return;
+
+        const distances = activeParticles.map(p => Math.sqrt(p.x * p.x + p.y * p.y));
+        const meanDistance = distances.reduce((a, b) => a + b, 0) / distances.length;
+        const maxDistance = Math.max(...distances);
+
+        const depthBuckets = { surface: 0, upper: 0, intermediate: 0, deep: 0 };
+        for (const p of activeParticles) {
+            const depthMeters = p.depth * 1000;
+            if (depthMeters < 50) depthBuckets.surface++;
+            else if (depthMeters < 200) depthBuckets.upper++;
+            else if (depthMeters < 500) depthBuckets.intermediate++;
+            else depthBuckets.deep++;
+        }
+
+        console.log(`📊 PLUME STATISTICS - Day ${this.stats.simulationDays.toFixed(1)}:`);
+        console.log(`   Tracer: ${this.tracer.name}`);
+        console.log(`   Active particles: ${activeParticles.length}`);
+        console.log(`   Mean distance: ${meanDistance.toFixed(1)} km`);
+        console.log(`   Max distance: ${maxDistance.toFixed(1)} km`);
+        console.log(`   Depth distribution: S:${depthBuckets.surface} U:${depthBuckets.upper} I:${depthBuckets.intermediate} D:${depthBuckets.deep}`);
+        console.log(`   Max depth: ${this.stats.maxDepthReached.toFixed(0)} m`);
+        console.log(`   On land: ${this.stats.particlesOnLand}`);
+        console.log(`   Max concentration: ${this.stats.maxConcentration.toExponential(2)} ${this.tracer.units}/m³`);
+    }
+
+    getStats() {
+        const activeParticles = this.getActiveParticles();
+        const distances = activeParticles.map(p => Math.sqrt(p.x * p.x + p.y * p.y));
+        const meanDistance = distances.length > 0 ?
+            distances.reduce((a, b) => a + b, 0) / distances.length : 0;
+
+        return {
+            isRunning: this.isRunning,
+            daysElapsed: this.stats.simulationDays.toFixed(2),
+            totalParticles: this.stats.totalReleased,
+            activeParticles: activeParticles.length,
+            decayedParticles: this.stats.totalDecayed,
+            meanDistance: meanDistance.toFixed(1),
+            maxDepth: this.stats.maxDepthReached.toFixed(0),
+            particlesOnLand: this.stats.particlesOnLand,
+            maxConcentration: this.stats.maxConcentration.toExponential(2),
+            tracerName: this.tracer.name,
+            tracerUnits: this.tracer.units
+        };
+    }
+
+    // ==================== CONFIGURABLE PATH CHECKING ====================
+
+    async _checkPathToOcean(startX, startY, endX, endY, depth, currentSimDay, steps = 5) {
+        const stepX = (endX - startX) / steps;
+        const stepY = (endY - startY) / steps;
+
+        for (let s = 1; s <= steps; s++) {
+            const testX = startX + stepX * s;
+            const testY = startY + stepY * s;
+            const testLon = this.REFERENCE_LON + (testX / this.LON_SCALE);
+            const testLat = this.REFERENCE_LAT + (testY / this.LAT_SCALE);
+            const isOcean = await this.hycomLoader.isOcean(testLon, testLat, depth * 1000, currentSimDay);
+
+            if (!isOcean) {
+                const safeX = startX + stepX * (s - 1);
+                const safeY = startY + stepY * (s - 1);
+                return { safe: false, lastValidX: safeX, lastValidY: safeY };
+            }
+        }
+        return { safe: true, lastValidX: endX, lastValidY: endY };
     }
 
     groupParticlesByDepth(particles) {
@@ -770,140 +1366,6 @@ class ParticleEngine3D {
         console.log(`🔧 RK4 ${enable ? 'enabled' : 'disabled'}`);
     }
 
-    async rk4Integrate(p, deltaDays, currentSimDay) {
-        const h = this.calculateOptimalStepSize(p, deltaDays);
-        const steps = Math.ceil(deltaDays / h);
-        const actualStep = deltaDays / steps;
-
-        let x = p.x;
-        let y = p.y;
-        let depth = p.depth;
-        let totalU = 0;
-        let totalV = 0;
-
-        for (let step = 0; step < steps; step++) {
-            const stepTime = currentSimDay + step * actualStep;
-            const result = await this.rk4Step(x, y, depth, actualStep, stepTime);
-
-            if (!result.success) {
-                return await this.eulerIntegrate(p, deltaDays, currentSimDay);
-            }
-
-            x = result.x;
-            y = result.y;
-            depth = result.depth;
-            totalU += result.u_avg;
-            totalV += result.v_avg;
-        }
-
-        return {
-            x, y, depth,
-            u_avg: totalU / steps,
-            v_avg: totalV / steps,
-            stepsTaken: steps
-        };
-    }
-
-    calculateOptimalStepSize(p, totalDeltaDays) {
-        if (!this.rk4Settings.adaptiveStepSize) {
-            return Math.min(totalDeltaDays, this.rk4Settings.maxStepSize);
-        }
-
-        const speed = Math.sqrt(p.velocityU * p.velocityU + p.velocityV * p.velocityV);
-        const characteristicTime = 1.0 / (speed + 0.001);
-
-        let optimalStep = Math.min(
-            characteristicTime * this.rk4Settings.timeStepSafety,
-            this.rk4Settings.maxStepSize
-        );
-
-        optimalStep = Math.max(optimalStep, this.rk4Settings.minStepSize);
-        optimalStep = Math.min(optimalStep, totalDeltaDays);
-
-        return optimalStep;
-    }
-
-    async rk4Step(x, y, depth, h, currentTime) {
-        try {
-            const depthMeters = depth * 1000;
-
-            const lon1 = this.FUKUSHIMA_LON + (x / this.LON_SCALE);
-            const lat1 = this.FUKUSHIMA_LAT + (y / this.LAT_SCALE);
-            const k1 = await this.getVelocityAt(lon1, lat1, depthMeters, currentTime);
-
-            if (!k1.found) return { success: false };
-
-            const x2 = x + h/2 * k1.u * 86.4;
-            const y2 = y + h/2 * k1.v * 86.4;
-            const lon2 = this.FUKUSHIMA_LON + (x2 / this.LON_SCALE);
-            const lat2 = this.FUKUSHIMA_LAT + (y2 / this.LAT_SCALE);
-            const k2 = await this.getVelocityAt(lon2, lat2, depthMeters, currentTime + h/2);
-
-            const x3 = x + h/2 * (k2.found ? k2.u : k1.u) * 86.4;
-            const y3 = y + h/2 * (k2.found ? k2.v : k1.v) * 86.4;
-            const lon3 = this.FUKUSHIMA_LON + (x3 / this.LON_SCALE);
-            const lat3 = this.FUKUSHIMA_LAT + (y3 / this.LAT_SCALE);
-            const k3 = await this.getVelocityAt(lon3, lat3, depthMeters, currentTime + h/2);
-
-            const x4 = x + h * (k3.found ? k3.u : k1.u) * 86.4;
-            const y4 = y + h * (k3.found ? k3.v : k1.v) * 86.4;
-            const lon4 = this.FUKUSHIMA_LON + (x4 / this.LON_SCALE);
-            const lat4 = this.FUKUSHIMA_LAT + (y4 / this.LAT_SCALE);
-            const k4 = await this.getVelocityAt(lon4, lat4, depthMeters, currentTime + h);
-
-            const u_avg = (1/6) * (
-                k1.u +
-                2 * (k2.found ? k2.u : k1.u) +
-                2 * (k3.found ? k3.u : k1.u) +
-                (k4.found ? k4.u : k1.u)
-            );
-
-            const v_avg = (1/6) * (
-                k1.v +
-                2 * (k2.found ? k2.v : k1.v) +
-                2 * (k3.found ? k3.v : k1.v) +
-                (k4.found ? k4.v : k1.v)
-            );
-
-            return {
-                success: true,
-                x: x + h * u_avg * 86.4,
-                y: y + h * v_avg * 86.4,
-                depth: depth,
-                u_avg, v_avg
-            };
-
-        } catch (error) {
-            return { success: false };
-        }
-    }
-
-    async eulerIntegrate(p, deltaDays, currentSimDay) {
-        const lon = this.FUKUSHIMA_LON + (p.x / this.LON_SCALE);
-        const lat = this.FUKUSHIMA_LAT + (p.y / this.LAT_SCALE);
-        const depthMeters = p.depth * 1000;
-
-        const velocity = await this.getVelocityAt(lon, lat, depthMeters, currentSimDay);
-
-        if (velocity.found) {
-            return {
-                x: p.x + deltaDays * velocity.u * 86.4,
-                y: p.y + deltaDays * velocity.v * 86.4,
-                depth: p.depth,
-                u_avg: velocity.u,
-                v_avg: velocity.v
-            };
-        }
-
-        return {
-            x: p.x,
-            y: p.y,
-            depth: p.depth,
-            u_avg: 0,
-            v_avg: 0
-        };
-    }
-
     // ==================== UTILITY METHODS ====================
 
     getActiveParticles() {
@@ -920,66 +1382,14 @@ class ParticleEngine3D {
     getDayOfYear() {
         const start = new Date(this.currentSimulationTime.getFullYear(), 0, 0);
         const diff = this.currentSimulationTime - start;
-        const oneDay = 86400000;
-        return Math.floor(diff / oneDay);
+        return Math.floor(diff / 86400000);
     }
 
     getFormattedTime() {
         return {
             year: this.currentSimulationTime.getUTCFullYear(),
             month: this.currentSimulationTime.getUTCMonth() + 1,
-            day: this.currentSimulationTime.getUTCDate(),
-            hour: this.currentSimulationTime.getUTCHours(),
-            minute: this.currentSimulationTime.getUTCMinutes(),
-            second: this.currentSimulationTime.getUTCSeconds()
-        };
-    }
-
-    // ==================== STATISTICS ====================
-
-    logStatistics() {
-        const activeParticles = this.getActiveParticles();
-        if (activeParticles.length === 0) return;
-
-        const distances = activeParticles.map(p => Math.sqrt(p.x * p.x + p.y * p.y));
-        const meanDistance = distances.reduce((a, b) => a + b, 0) / distances.length;
-        const maxDistance = Math.max(...distances);
-
-        const depthBuckets = { surface: 0, upper: 0, intermediate: 0, deep: 0 };
-        for (const p of activeParticles) {
-            const depthMeters = p.depth * 1000;
-            if (depthMeters < 50) depthBuckets.surface++;
-            else if (depthMeters < 200) depthBuckets.upper++;
-            else if (depthMeters < 500) depthBuckets.intermediate++;
-            else depthBuckets.deep++;
-        }
-
-//        console.log(`📊 PLUME STATISTICS - Day ${this.stats.simulationDays.toFixed(1)}:`);
-//        console.log(`   Active particles: ${activeParticles.length}`);
-//        console.log(`   Mean distance: ${meanDistance.toFixed(1)} km`);
-//        console.log(`   Max distance: ${maxDistance.toFixed(1)} km`);
-//        console.log(`   Depth distribution: S:${depthBuckets.surface} U:${depthBuckets.upper} I:${depthBuckets.intermediate} D:${depthBuckets.deep}`);
-//        console.log(`   Max depth: ${this.stats.maxDepthReached.toFixed(0)} m`);
-//        console.log(`   On land: ${this.stats.particlesOnLand}`);
-//        console.log(`   Max concentration: ${this.stats.maxConcentration.toExponential(2)} Bq/m³`);
-    }
-
-    getStats() {
-        const activeParticles = this.getActiveParticles();
-        const distances = activeParticles.map(p => Math.sqrt(p.x * p.x + p.y * p.y));
-        const meanDistance = distances.length > 0 ?
-            distances.reduce((a, b) => a + b, 0) / distances.length : 0;
-
-        return {
-            isRunning: this.isRunning,
-            daysElapsed: this.stats.simulationDays.toFixed(2),
-            totalParticles: this.stats.totalReleased,
-            activeParticles: activeParticles.length,
-            decayedParticles: this.stats.totalDecayed,
-            meanDistance: meanDistance.toFixed(1),
-            maxDepth: this.stats.maxDepthReached.toFixed(0),
-            particlesOnLand: this.stats.particlesOnLand,
-            maxConcentration: this.stats.maxConcentration.toExponential(2),
+            day: this.currentSimulationTime.getUTCDate()
         };
     }
 
@@ -987,35 +1397,49 @@ class ParticleEngine3D {
 
     setParameter(name, value) {
         if (name in this.params) {
-            console.log(`🔧 Parameter ${name}: ${this.params[name]} → ${value}`);
             this.params[name] = value;
             return true;
         }
-        console.warn(`⚠️ Unknown parameter: ${name}`);
         return false;
     }
 
-    // ==================== EXPORT METHODS ====================
+    setTracer(tracerId) {
+        this.tracerId = tracerId;
+        this.tracer = TracerLibrary[tracerId] || TracerLibrary.cs137;
+        this.releaseManager.setTracer(tracerId);
+        this.calculateParticleCalibration();
 
-    getParticleData() {
-        return this.getActiveParticles().map(p => ({
-            x: p.x,
-            y: p.y,
-            depth: p.depth,
-            concentration: p.concentration,
-            age: p.age,
-            mass: p.mass,
-            velocityU: p.velocityU,
-            velocityV: p.velocityV
-        }));
+        // Update existing particles? Only new ones will use new tracer
+        console.log(`🧪 Switched to tracer: ${this.tracer.name}`);
+    }
+
+    setReleasePhases(phases) {
+        if (!this.releaseManager) {
+            console.warn('⚠️ No releaseManager available');
+            return;
+        }
+
+        // Replace the phases in releaseManager
+        this.releaseManager.phases = phases;
+
+        // Recalculate particle calibration
+        this.calculateParticleCalibration();
+
+        console.log(`📋 Release phases updated: ${phases.length} phases`);
+        phases.forEach((phase, i) => {
+            console.log(`   Phase ${i+1}: days ${phase.start}-${phase.end}, ${phase.total} ${phase.unit} (rate: ${phase.getRate().toFixed(2)} ${phase.unit}/day)`);
+        });
     }
 }
 
 // Export to global scope
 if (typeof window !== 'undefined') {
+    window.TracerLibrary = TracerLibrary;
+    window.ReleasePhase = ReleasePhase;
+    window.ReleaseManager = ReleaseManager;
     window.ParticleEngine3D = ParticleEngine3D;
     window.ParticleEngine = ParticleEngine3D;
-    console.log('✅ ParticleEngine3D loaded with proper land checking');
+    console.log('✅ Multi-Tracer ParticleEngine3D loaded');
 }
 
 console.log('=== ParticleEngine3D script complete ===');

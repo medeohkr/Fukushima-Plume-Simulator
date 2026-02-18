@@ -33,39 +33,63 @@ class BakeSystem {
         try {
             // Step 1: Initialize engine with config
             this.updateProgress(0, 'Initializing simulation...');
-            const engine = new ParticleEngine3D(config.numParticles);
 
-            // Wait for engine to initialize loaders
-            await engine.init();
+            // Create new engine with the provided location
+            const engine = new ParticleEngine3D(
+                config.numParticles,
+                'cs137',
+                config.location || { lat: 37.42, lon: 141.31 }
+            );
 
-            // Apply settings
+            // ===== GET PHASES FROM CONFIG =====
+            if (config.phases && config.phases.length > 0) {
+                console.log('📋 Using custom phases from config:', config.phases);
+
+                const phasesToCopy = config.phases.map(p =>
+                    new ReleasePhase(p.start, p.end, p.total, p.unit)
+                );
+
+                engine.setReleasePhases(phasesToCopy);
+
+                console.log('✅ Custom phases applied:', phasesToCopy.map(p =>
+                    `${p.start}-${p.end}, ${p.total}${p.unit}`
+                ));
+            } else {
+                console.log('⚠️ No phases in config, using default 30-day release');
+            }
+            // Apply settings from config
             engine.setParameter('diffusivityScale', config.ekeDiffusivity);
             if (config.rk4Enabled) {
                 engine.enableRK4(true);
             }
 
-            // Step 2: Start simulation
-            engine.startSimulation();
-            this.updateProgress(0, 'Simulation started...');
 
-            // Step 3: Calculate snapshot days
-            const snapshotDays = [];
-            for (let day = 0; day <= config.durationDays; day += config.snapshotInterval) {
-                snapshotDays.push(day);
+            // Set start date if provided
+            if (config.startDate) {
+                engine.simulationStartTime = new Date(config.startDate);
+                engine.currentSimulationTime = new Date(config.startDate);
             }
 
+            // Force recalculation of particle calibration with new phases
+            engine.calculateParticleCalibration();
+
+            // Step 2: Start simulation
+            engine.startSimulation();
+
+            // Step 3: Calculate snapshot days based on config
+            const snapshotDays = [];
+            for (let day = 0; day <= config.durationDays; day += 1) { // Always daily
+                snapshotDays.push(day);
+            }
             console.log(`📅 Will capture ${snapshotDays.length} snapshots at days:`, snapshotDays);
-            this.updateProgress(1, `Planning ${snapshotDays.length} snapshots...`);
 
             // Step 4: Run and capture snapshots
             for (let i = 0; i < snapshotDays.length; i++) {
                 const targetDay = snapshotDays[i];
 
-                console.log(`📸 Baking to day ${targetDay} (${i+1}/${snapshotDays.length})...`);
-
-                // Update progress for this snapshot
-                const baseProgress = 1; // Starting from 15%
-                const progressRange = 99; // 80% of progress for the actual baking
+                // Update progress
+                const baseProgress = 0;
+                const progressRange = 100;
                 const snapshotProgress = baseProgress + Math.floor((i / snapshotDays.length) * progressRange);
 
                 this.updateProgress(snapshotProgress,
@@ -87,6 +111,14 @@ class BakeSystem {
                 this.currentBakeJob.snapshots.push(snapshot);
 
                 console.log(`✅ Captured day ${targetDay} with ${snapshot.particleCount} particles`);
+
+                // Log current phase status
+                const activePhase = engine.releaseManager.phases.find(p =>
+                    targetDay >= p.start && targetDay <= p.end
+                );
+                if (activePhase) {
+                    console.log(`   Active phase: ${activePhase.start}-${activePhase.end}, rate: ${activePhase.getRate().toFixed(2)} ${activePhase.unit}/day`);
+                }
             }
 
             // Step 5: Finalize
@@ -101,7 +133,8 @@ class BakeSystem {
                 this.callbacks.onBakeComplete({
                     snapshotCount: this.snapshots.length,
                     durationDays: config.durationDays,
-                    particleCount: config.numParticles
+                    particleCount: config.numParticles,
+                    phases: engine.releaseManager.phases
                 });
             }
 
@@ -109,26 +142,37 @@ class BakeSystem {
             return this.snapshots;
 
         } catch (error) {
-            console.error('Bake failed:', error);
+            console.error('❌ Bake failed:', error);
             this.bakeInProgress = false;
             throw error;
         }
     }
-
     async runSimulationStep(engine, deltaDays) {
-        // Set the time step
-        const steps = Math.max(1, Math.floor(deltaDays * 10)); // At least 1 step per 0.1 days
-        const stepSize = deltaDays / steps;
+        // Store original running state
+        const wasRunning = engine.isRunning;
 
-        for (let i = 0; i < steps; i++) {
-            // Manually advance simulation time
-            engine.stats.simulationDays += stepSize;
+        // Make sure engine thinks it's running
+        if (!wasRunning) {
+            engine.startSimulation();
+        }
 
-            // Update particles
-            await engine.updateParticles(stepSize);
+        // Set lastUpdateTime to now to avoid huge delta
+        engine.lastUpdateTime = Date.now();
 
-            // Execute continuous release
-            engine.executeContinuousRelease(stepSize);
+        // Calculate how many update cycles we need
+        const targetDay = engine.stats.simulationDays + deltaDays;
+
+        while (engine.stats.simulationDays < targetDay - 0.01) {
+            // Let engine.update() handle the timing
+            await engine.update();
+
+            // Small delay to keep UI responsive
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        // Restore original running state if needed
+        if (!wasRunning) {
+            engine.pauseSimulation();
         }
     }
 

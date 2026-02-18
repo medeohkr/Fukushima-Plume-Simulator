@@ -3,13 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pacific Ocean Transport Simulator - 3D Physics</title>
+    <title>PROTEUS - Pacific Radionuclide Oceanic Transport Engine & Universal Simulator</title>
 
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-
-    <!-- Deck.gl CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/deck.gl@latest/dist/deckgl.css" />
 
     <!-- Font Awesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -53,22 +50,32 @@
         }
 
         .sidebar-header h1 {
-            font-size: 22px;
+            font-size: 28px;
             color: #4fc3f7;
             margin-bottom: 5px;
             display: flex;
             align-items: center;
             gap: 8px;
+            letter-spacing: 1px;
         }
 
         .sidebar-header h1 i {
-            font-size: 24px;
+            font-size: 28px;
+            color: #ffd700;
         }
 
         .subtitle {
             font-size: 12px;
             color: #b0bec5;
             line-height: 1.4;
+            font-style: italic;
+        }
+
+        .proteus-tagline {
+            font-size: 10px;
+            color: #4fc3f7;
+            margin-top: 5px;
+            letter-spacing: 0.5px;
         }
 
         /* Controls Section */
@@ -117,7 +124,7 @@
             letter-spacing: 0.3px;
         }
 
-        /* Unified Slider Styling */
+        /* Universal Slider Styling */
         .slider {
             width: 100%;
             height: 6px;
@@ -469,6 +476,40 @@
                 height: 55vh;
             }
         }
+        /* Location Picker Styles */
+        #location-lat, #location-lon {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        #location-lat:focus, #location-lon:focus {
+            outline: none;
+            border-color: #4fc3f7;
+            box-shadow: 0 0 0 2px rgba(79, 195, 247, 0.2);
+        }
+
+        .map-click-active {
+            cursor: crosshair !important;
+        }
+
+        .location-marker-pulse {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                r: 8;
+                opacity: 1;
+            }
+            50% {
+                r: 12;
+                opacity: 0.7;
+            }
+            100% {
+                r: 8;
+                opacity: 1;
+            }
+        }
     </style>
 </head>
 <body>
@@ -476,25 +517,17 @@
         <!-- Sidebar -->
         <div id="sidebar">
             <div class="sidebar-header">
-                <h1><i class="fas fa-water"></i> Pacific Transport Simulator</h1>
+                <h1><i class="fas fa-water"></i> PROTEUS</h1>
                 <p class="subtitle">
-                    3D Lagrangian particle tracking with HYCOM currents, EKE diffusion, and depth-resolved visualization
+                    Pacific Radionuclide Oceanic Transport Engine & Universal Simulator
                 </p>
+                <div class="proteus-tagline">
+                    <i class="fas fa-compass"></i> Where currents become clear
+                </div>
             </div>
 
             <div id="simulation-controls">
-                <!-- ===== MODE SELECTION ===== -->
-                <div class="control-group" style="border-bottom: 2px solid rgba(79, 195, 247, 0.25);">
-                    <label><i class="fas fa-cog"></i> SIMULATION MODE</label>
-                    <div class="button-group">
-                        <button id="btn-pre-render" class="btn active">
-                            <i class="fas fa-database"></i> Pre-Render
-                        </button>
-                        <button id="btn-realtime" class="btn">
-                            <i class="fas fa-bolt"></i> Real-Time
-                        </button>
-                    </div>
-                </div>
+
                 <!-- ===== VISUALIZATION TYPE TOGGLE ===== -->
                 <div class="control-group" style="border-bottom: 2px solid rgba(79, 195, 247, 0.25);">
                     <label><i class="fas fa-eye"></i> VISUALIZATION</label>
@@ -506,6 +539,15 @@
                             <i class="fas fa-dot-circle"></i> Particles
                         </button>
                     </div>
+                </div>
+
+                <!-- ===== TRAILS TOGGLE ===== -->
+                <div class="control-group" style="display: flex; align-items: center; justify-content: space-between;">
+                    <label style="margin-bottom: 0;"><i class="fas fa-stream"></i> PARTICLE TRAILS</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="trailsToggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
                 </div>
 
                 <!-- ===== PRE-RENDER CONTROLS ===== -->
@@ -529,23 +571,10 @@
                             <label><i class="fas fa-calendar-alt"></i> DURATION</label>
                             <span id="pr-duration-value" class="slider-value">180 days</span>
                         </div>
-                        <input type="range" id="pr-duration" class="slider" min="30" max="730" step="10" value="180">
+                        <input type="range" id="pr-duration" class="slider" min="1" max="731" step="1" value="180">
                         <div class="slider-labels">
-                            <span>30 days</span>
-                            <span>2 years</span>
-                        </div>
-                    </div>
-
-                    <!-- Snapshot Interval -->
-                    <div class="control-group">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <label><i class="fas fa-clock"></i> SNAPSHOT INTERVAL</label>
-                            <span id="pr-interval-value" class="slider-value">7 days</span>
-                        </div>
-                        <input type="range" id="pr-interval" class="slider" min="1" max="30" step="1" value="7">
-                        <div class="slider-labels">
-                            <span>Daily</span>
-                            <span>Monthly</span>
+                            <span>1 day</span>
+                            <span id="duration-max-label">2 years</span>
                         </div>
                     </div>
 
@@ -555,10 +584,10 @@
                             <label><i class="fas fa-water"></i> EKE DIFFUSIVITY</label>
                             <span id="pr-eke-value" class="slider-value">1.0x</span>
                         </div>
-                        <input type="range" id="pr-eke" class="slider" min="0" max="3" step="0.1" value="1.0">
+                        <input type="range" id="pr-eke" class="slider" min="0" max="10" step="0.1" value="1.0">
                         <div class="slider-labels">
                             <span>Pure advection</span>
-                            <span>Extreme</span>
+                            <span>10x Extreme</span>
                         </div>
                     </div>
 
@@ -585,67 +614,6 @@
                         <div class="progress-bar-bg">
                             <div id="pr-progress-bar" class="progress-bar-fill" style="width: 0%;"></div>
                         </div>
-                    </div>
-                </div>
-
-                <!-- ===== REALTIME CONTROLS ===== -->
-                <div id="realtime-controls" style="display: none;">
-                    <!-- Particle Count -->
-                    <div class="control-group">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <label><i class="fas fa-cubes"></i> PARTICLE COUNT</label>
-                            <span id="rt-particles-value" class="slider-value">5,000</span>
-                        </div>
-                        <input type="range" id="rt-particles" class="slider" min="100" max="20000" step="100" value="5000">
-                        <div class="slider-labels">
-                            <span>100</span>
-                            <span>20,000</span>
-                        </div>
-                    </div>
-
-                    <!-- Simulation Speed -->
-                    <div class="control-group">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <label><i class="fas fa-tachometer-alt"></i> SIMULATION SPEED</label>
-                            <span id="rt-speed-value" class="slider-value">1.0x</span>
-                        </div>
-                        <input type="range" id="rt-speed" class="slider" min="0.1" max="10" step="0.1" value="1.0">
-                        <div class="slider-labels">
-                            <span>0.1x Slow</span>
-                            <span>10x Fast</span>
-                        </div>
-                    </div>
-
-                    <!-- EKE Diffusivity -->
-                    <div class="control-group">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <label><i class="fas fa-water"></i> EKE DIFFUSIVITY</label>
-                            <span id="rt-eke-value" class="slider-value">1.0x</span>
-                        </div>
-                        <input type="range" id="rt-eke" class="slider" min="0" max="3" step="0.1" value="1.0">
-                        <div class="slider-labels">
-                            <span>Pure advection</span>
-                            <span>Extreme</span>
-                        </div>
-                    </div>
-
-                    <!-- RK4 Toggle -->
-                    <div class="control-group" style="display: flex; align-items: center; justify-content: space-between;">
-                        <label style="margin-bottom: 0;"><i class="fas fa-chart-line"></i> RK4 INTEGRATION</label>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="rt-rk4" checked>
-                            <span class="toggle-slider"></span>
-                        </label>
-                    </div>
-
-                    <!-- Control Buttons -->
-                    <div class="button-group">
-                        <button id="rt-start" class="btn btn-primary" style="flex: 1;">
-                            <i class="fas fa-play"></i> START
-                        </button>
-                        <button id="rt-reset" class="btn btn-secondary" style="flex: 1;">
-                            <i class="fas fa-redo"></i> RESET
-                        </button>
                     </div>
                 </div>
 
@@ -689,14 +657,146 @@
                             <label><i class="fas fa-arrows-alt-v"></i> DEPTH LAYER</label>
                             <span id="depth-value" class="slider-value">Surface (0m)</span>
                         </div>
-                        <input type="range" id="depth-slider" class="slider" min="0" max="5" step="1" value="0">
+                        <input type="range" id="depth-slider" class="slider" min="0" max="6" step="1" value="0">
                         <div class="slider-labels">
+                            <span>All</span>
                             <span>0m</span>
                             <span>50m</span>
                             <span>100m</span>
                             <span>200m</span>
                             <span>500m</span>
                             <span>1000m</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== TRACER SELECTION ===== -->
+                <div class="control-group">
+                    <label><i class="fas fa-flask"></i> TRACER</label>
+                    <select id="tracer-select" class="slider-value" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                        <optgroup label="Radionuclides">
+                            <option value="cs137">Cesium-137</option>
+                            <option value="cs134">Cesium-134</option>
+                            <option value="i131">Iodine-131</option>
+                            <option value="sr90">Strontium-90</option>
+                            <option value="h3">Tritium</option>
+                        </optgroup>
+                    </select>
+
+                    <!-- Tracer Info -->
+                    <div id="tracer-info" style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 4px; margin-top: 5px;">
+                        <div style="display: flex; justify-content: space-between;">
+                            <span>Type:</span>
+                            <span id="tracer-type">Radionuclide</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span>Half-life:</span>
+                            <span id="tracer-halfLife">30 years</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span>Behavior:</span>
+                            <span id="tracer-behavior">Dissolved</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== LOCATION PICKER ===== -->
+                <div class="control-group">
+                    <label><i class="fas fa-map-marker-alt"></i> RELEASE LOCATION</label>
+
+                    <!-- Coordinate Inputs -->
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <div style="flex: 1;">
+                            <label style="font-size: 11px;">Latitude</label>
+                            <input type="number" id="location-lat" min="-90" max="90" step="0.01" value="37.42"
+                                   style="width: 100%; background: rgba(0,0,0,0.3); color: #4fc3f7; border: 1px solid rgba(79,195,247,0.3); border-radius: 4px; padding: 8px;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label style="font-size: 11px;">Longitude</label>
+                            <input type="number" id="location-lon" min="100" max="260" step="0.01" value="141.21"
+                                   style="width: 100%; background: rgba(0,0,0,0.3); color: #4fc3f7; border: 1px solid rgba(79,195,247,0.3); border-radius: 4px; padding: 8px;">
+                        </div>
+                    </div>
+
+                    <!-- Map Click Instructions -->
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                        <div style="flex: 1; height: 1px; background: rgba(255,255,255,0.1);"></div>
+                        <span style="color: #b0bec5; font-size: 11px;">OR</span>
+                        <div style="flex: 1; height: 1px; background: rgba(255,255,255,0.1);"></div>
+                    </div>
+
+                    <!-- Map Click Mode Toggle -->
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
+                        <span style="color: #b0bec5; font-size: 12px;">
+                            <i class="fas fa-mouse-pointer"></i> Click on map to set location
+                        </span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="map-click-toggle">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <!-- Current Location Display -->
+                    <div style="background: rgba(79,195,247,0.1); padding: 8px; border-radius: 4px; margin-top: 5px;">
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #b0bec5;">Current:</span>
+                            <span id="current-location" style="color: #4fc3f7; font-family: 'Courier New';">37.42°N, 141.21°E</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+                            <span style="color: #b0bec5;">In Ocean:</span>
+                            <span id="location-ocean-status" style="color: #4fc3f7;">✅ Yes</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ===== DATE RANGE ===== -->
+                <div class="control-group">
+                    <label><i class="fas fa-calendar-range"></i> SIMULATION PERIOD</label>
+
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                        <div style="flex: 1;">
+                            <label style="font-size: 11px;">Start Date</label>
+                            <input type="date" id="sim-start-date" value="2011-03-01"
+                                   style="width: 100%; background: rgba(0,0,0,0.3); color: #4fc3f7; border: 1px solid rgba(79,195,247,0.3); border-radius: 4px; padding: 8px; font-family: 'Courier New';">
+                        </div>
+                        <div style="flex: 1;">
+                            <label style="font-size: 11px;">End Date</label>
+                            <input type="date" id="sim-end-date" value="2013-02-28"
+                                   style="width: 100%; background: rgba(0,0,0,0.3); color: #4fc3f7; border: 1px solid rgba(79,195,247,0.3); border-radius: 4px; padding: 8px; font-family: 'Courier New';">
+                        </div>
+                    </div>
+
+                    <div style="display: flex; justify-content: space-between; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px;">
+                        <span style="color: #b0bec5;">Total Days:</span>
+                        <span id="total-days" style="color: #4fc3f7; font-family: 'Courier New';">731 days</span>
+                    </div>
+                </div>
+
+                <!-- ===== RELEASE PHASE EDITOR ===== -->
+                <div class="control-group">
+                    <label><i class="fas fa-calendar-alt"></i> RELEASE SCHEDULE</label>
+
+                    <div id="phase-container">
+                        <!-- Phases will be added by JavaScript -->
+                    </div>
+
+                    <button id="add-phase-btn" class="btn" style="width: 100%; margin: 10px 0;">
+                        <i class="fas fa-plus"></i> Add Release Phase
+                    </button>
+
+                    <!-- Live Release Stats -->
+                    <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 4px; margin-top: 10px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span style="color: #b0bec5;">Total Release:</span>
+                            <span id="total-release" style="color: #4fc3f7; font-weight: 600;">0 GBq</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span style="color: #b0bec5;">Current Rate:</span>
+                            <span id="current-rate" style="color: #4fc3f7;">0 GBq/day</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between;">
+                            <span style="color: #b0bec5;">Particles/Day:</span>
+                            <span id="particles-per-day" style="color: #4fc3f7;">0</span>
                         </div>
                     </div>
                 </div>
@@ -744,6 +844,9 @@
                 </p>
                 <p style="margin-top: 5px;">
                     <i class="fas fa-code"></i> Open source · 3D Lagrangian transport
+                </p>
+                <p style="margin-top: 8px; color: #4fc3f7;">
+                    <i class="fas fa-compass"></i> PROTEUS v1.0
                 </p>
             </div>
         </div>
