@@ -1,7 +1,6 @@
-# process_eke_ultra_optimized.py
 """
-ULTRA-OPTIMIZED EKE processing with PHYSICS-BASED scaling.
-NO artificial bounds - let CMEMS data + physics determine values!
+Extract pure EKE from CMEMS ugosa/vgosa.
+NO physics, NO K calculation — just EKE = 0.5*(ugosa² + vgosa²)
 """
 
 import xarray as xr
@@ -16,19 +15,13 @@ from scipy.interpolate import RegularGridInterpolator
 import warnings
 
 # ===== CONFIGURATION =====
-TEST_MODE = False  # Set to True for testing, False for full processing
-INPUT_DIR = "/Users/shuian/PycharmProjects/Fukushima_Plume_Simulator/data/cmems_EKE_data"
-HYCOM_METADATA_PATH = "/Users/shuian/PycharmProjects/Fukushima_Plume_Simulator/data/currents_bin/currents_metadata.json"
-OUTPUT_DIR = "/Users/shuian/PycharmProjects/Fukushima_Plume_Simulator/data/eke_ultra_optimized2"
+TEST_MODE = False
+INPUT_DIR = "data/cmems_EKE_data/"
+HYCOM_METADATA_PATH = "data/currents_3d_bin/currents_3d_metadata.json"
+OUTPUT_DIR = "data/EKE_bin_pure/"
 DAILY_OUTPUT_DIR = os.path.join(OUTPUT_DIR, "daily")
 COORDS_FILE = os.path.join(OUTPUT_DIR, "eke_coords.bin")
 os.makedirs(DAILY_OUTPUT_DIR, exist_ok=True)
-
-# Physics constants - NO ARTIFICIAL BOUNDS!
-C = 0.1  # Empirical constant
-T_L_DAYS = 7  # Lagrangian timescale
-T_L_SECONDS = T_L_DAYS * 86400
-ALPHA = 0.1  # Scale factor for anomaly EKE (15% - adjustable)
 
 warnings.filterwarnings('ignore')
 
@@ -75,20 +68,20 @@ def load_hycom_grid():
         print(f"❌ Failed to load HYCOM grid: {e}")
         # Create fallback grid
         print("  Creating fallback 0.04° grid...")
-        lon = np.linspace(120.0, 185.0, 1626, dtype=np.float32)
-        lat = np.linspace(15.0, 65.0, 1261, dtype=np.float32)
+        lon = np.linspace(100.0, 260.0, 1921, dtype=np.float32)
+        lat = np.linspace(0.0, 60.0, 721, dtype=np.float32)
         lon_grid, lat_grid = np.meshgrid(lon, lat)
 
         return {
             'lon_grid': lon_grid,
             'lat_grid': lat_grid,
-            'n_lat': 1261,
-            'n_lon': 1626,
+            'n_lat': 721,
+            'n_lon': 1921,
             'metadata': {'months': []}
         }
 
 
-# ===== OPTIMIZED BINARY FORMAT =====
+# ===== COORDINATES FILE =====
 
 def save_coordinates_file(lon_grid, lat_grid, output_path):
     """Save coordinates once (float32)."""
@@ -98,7 +91,7 @@ def save_coordinates_file(lon_grid, lat_grid, output_path):
     total_cells = n_lat * n_lon
 
     with open(output_path, 'wb') as f:
-        header = struct.pack('3i', 6, n_lat, n_lon)
+        header = struct.pack('3i', 1, n_lat, n_lon)
         f.write(header)
         f.write(lon_grid.astype(np.float32).tobytes())
         f.write(lat_grid.astype(np.float32).tobytes())
@@ -115,30 +108,48 @@ def save_coordinates_file(lon_grid, lat_grid, output_path):
     }
 
 
-def validate_float16_precision(K_data_float32):
-    """Test float16 precision."""
-    print("  🔍 Validating float16 precision...")
+# ===== PURE EKE EXTRACTION =====
 
-    K_float16 = K_data_float32.astype(np.float16)
-    K_back_to_float32 = K_float16.astype(np.float32)
-
-    abs_errors = np.abs(K_data_float32 - K_back_to_float32)
-    max_error = np.max(abs_errors)
-    mean_error = np.mean(abs_errors)
-
-    print(f"    Original range: {K_data_float32.min():.1f} to {K_data_float32.max():.1f} m²/s")
-    print(f"    Float16 range:  {K_back_to_float32.min():.1f} to {K_back_to_float32.max():.1f} m²/s")
-    print(f"    Max error: {max_error:.3f} m²/s")
-    print(f"    Mean error: {mean_error:.3f} m²/s")
-
-    if max_error > 2.0:
-        print(f"    ⚠️  Warning: Float16 precision loss > 2 m²/s")
-
-    return K_float16, max_error, mean_error
+def calculate_pure_eke(ugosa, vgosa):
+    """Calculate pure EKE without any physics."""
+    eke = 0.5 * (np.square(ugosa) + np.square(vgosa))
+    
+    # Replace NaN with 0
+    eke = np.nan_to_num(eke, nan=0.0)
+    
+    # Diagnostic
+    valid_eke = eke[eke > 0]
+    if len(valid_eke) > 0:
+        print(f"    EKE stats - min={valid_eke.min():.6f}, mean={valid_eke.mean():.6f}, max={valid_eke.max():.6f} m²/s²")
+    
+    return eke.astype(np.float32)
 
 
-def save_daily_k_file_optimized(K_data_float32, date_obj, coords_info, output_dir):
-    """Save daily K values in optimized format (float16)."""
+def interpolate_to_hycom_grid(eke_data, eke_lon, eke_lat, hycom_lon_grid, hycom_lat_grid):
+    """Interpolate EKE from regular grid to HYCOM grid."""
+    print(f"    Interpolating {eke_data.shape} → {hycom_lon_grid.shape}...")
+
+    hycom_points = np.column_stack([
+        hycom_lon_grid.ravel(),
+        hycom_lat_grid.ravel()
+    ])
+
+    interpolator = RegularGridInterpolator(
+        (eke_lat, eke_lon),
+        eke_data,
+        method='linear',
+        bounds_error=False,
+        fill_value=0.0
+    )
+
+    eke_hycom_flat = interpolator(hycom_points[:, ::-1])
+    eke_hycom = eke_hycom_flat.reshape(hycom_lon_grid.shape)
+
+    return eke_hycom.astype(np.float32)
+
+
+def save_daily_eke_file(eke_data, date_obj, coords_info, output_dir):
+    """Save daily EKE as float16."""
     if hasattr(date_obj, 'strftime'):
         date_str = date_obj.strftime('%Y%m%d')
         year, month, day = date_obj.year, date_obj.month, date_obj.day
@@ -151,117 +162,29 @@ def save_daily_k_file_optimized(K_data_float32, date_obj, coords_info, output_di
     filepath = os.path.join(output_dir, filename)
 
     expected_shape = (coords_info['n_lat'], coords_info['n_lon'])
-    if K_data_float32.shape != expected_shape:
-        raise ValueError(f"Shape mismatch: {K_data_float32.shape} vs {expected_shape}")
+    if eke_data.shape != expected_shape:
+        raise ValueError(f"Shape mismatch: {eke_data.shape} vs {expected_shape}")
 
-    K_float16, max_error, mean_error = validate_float16_precision(K_data_float32)
+    # Convert to float16 for storage
+    eke_float16 = eke_data.astype(np.float16)
 
     with open(filepath, 'wb') as f:
-        max_error_scaled = int(max_error * 1000)
-        header = struct.pack('5i', 6, year, month, day, max_error_scaled)
+        header = struct.pack('4i', 1, year, month, day)
         f.write(header)
-        f.write(K_float16.tobytes())
+        f.write(eke_float16.tobytes())
 
     file_size = os.path.getsize(filepath)
-    float32_size = coords_info['total_cells'] * 4
-    savings_pct = (1 - file_size / float32_size) * 100
-
-    print(f"    📁 {date_str}: {file_size / 1024 / 1024:.2f}MB (float16, {savings_pct:.0f}% smaller)")
+    print(f"    📁 {date_str}: {file_size / 1024 / 1024:.2f}MB")
 
     return {
         'date': date_str,
         'file': filename,
-        'size': int(file_size),
-        'max_error': float(max_error),
-        'mean_error': float(mean_error),
+        'size': int(file_size)
     }
 
 
-# ===== EKE PROCESSING - NO ARTIFICIAL BOUNDS! =====
-
-def calculate_diffusivity(ugosa, vgosa):
-    """
-    Calculate diffusivity K from geostrophic anomaly velocities.
-    Physics-based with realistic bounds for Fukushima simulation.
-    """
-    # 1. Calculate EKE from geostrophic ANOMALIES
-    eke = 0.5 * (np.square(ugosa) + np.square(vgosa))
-
-    # 2. Diagnostic print
-    valid_eke = eke[~np.isnan(eke)]
-    if len(valid_eke) > 0:
-        print(
-            f"    EKE stats - min={valid_eke.min():.6f}, mean={valid_eke.mean():.6f}, max={valid_eke.max():.6f} m²/s²")
-    else:
-        print(f"    EKE stats - all NaN")
-
-    # 3. Scale anomaly-EKE to effective diffusivity
-    # ALPHA = 0.1 gives mean K ~125 m²/s (perfect for Fukushima!)
-    eke_effective = eke * ALPHA
-
-    # 4. Calculate diffusivity using physics formula
-    K = C * eke_effective * T_L_SECONDS
-
-    # 5. Apply PHYSICS-BASED maximum (not arbitrary!)
-    # 3000 m²/s allows strong Kuroshio eddies
-    # 2000 m²/s is more conservative
-    MAX_PHYSICAL_K = 3000.0  # or 2000.0 for conservative
-
-    # Smooth capping (preserves distribution shape)
-    K = np.minimum(K, MAX_PHYSICAL_K)
-
-    # 6. Special handling for coastal extremes
-    # Detect likely coastal artifacts (extremely high gradients)
-    if K.max() > MAX_PHYSICAL_K * 0.8:  # If many values near max
-        # Find 99th percentile (exclude extreme outliers)
-        k_99 = np.percentile(K[K > 0], 99) if np.any(K > 0) else MAX_PHYSICAL_K
-        if k_99 < MAX_PHYSICAL_K * 0.5:  # If 99% are much lower than max
-            print(f"    ⚠️  Coastal extremes detected, capping at {k_99:.0f} m²/s (99th percentile)")
-            K = np.minimum(K, k_99)
-
-    # 7. Replace NaN with 0
-    K = np.nan_to_num(K, nan=0.0)
-
-    # 8. Diagnostic print of final K
-    valid_K = K[K != 0]
-    if len(valid_K) > 0:
-        print(f"    K stats - min={valid_K.min():.1f}, mean={valid_K.mean():.1f}, max={valid_K.max():.1f} m²/s")
-        print(f"    Percent zeros: {(K == 0).sum() / K.size * 100:.1f}%")
-
-        # Distribution analysis
-        percentiles = np.percentile(valid_K, [50, 75, 90, 95, 99])
-        print(f"    K percentiles - 50%={percentiles[0]:.0f}, 75%={percentiles[1]:.0f}, "
-              f"90%={percentiles[2]:.0f}, 95%={percentiles[3]:.0f}, 99%={percentiles[4]:.0f} m²/s")
-    else:
-        print(f"    K stats - all zeros")
-
-    return K.astype(np.float32)
-
-def interpolate_to_hycom_grid(K_eke, eke_lon, eke_lat, hycom_lon_grid, hycom_lat_grid):
-    """Interpolate diffusivity from EKE grid to HYCOM grid."""
-    print(f"    Interpolating {K_eke.shape} → {hycom_lon_grid.shape}...")
-
-    hycom_points = np.column_stack([
-        hycom_lon_grid.ravel(),
-        hycom_lat_grid.ravel()
-    ])
-
-    interpolator = RegularGridInterpolator(
-        (eke_lat, eke_lon),
-        K_eke,
-        method='linear',
-        bounds_error=False,
-        fill_value=0.0  # Fill missing with 0, not artificial minimum!
-    )
-
-    K_hycom_flat = interpolator(hycom_points[:, ::-1])
-    K_hycom = K_hycom_flat.reshape(hycom_lon_grid.shape)
-
-    return K_hycom.astype(np.float32)
-
-
 def process_single_eke_file(filepath, hycom_grid, coords_info, all_metadata):
-    """Process one EKE file with optimization."""
+    """Process one EKE file."""
     print(f"\n📂 Processing: {os.path.basename(filepath)}")
 
     file_stats = {'days_processed': 0, 'errors': 0, 'total_size': 0}
@@ -274,10 +197,8 @@ def process_single_eke_file(filepath, hycom_grid, coords_info, all_metadata):
         total_days = len(time_values)
 
         print(f"  Found {total_days} days in file")
-        print(f"  Using ALPHA = {ALPHA} (scale factor)")
 
         for day_idx in range(total_days):
-            # Test mode: process only first day
             if TEST_MODE and day_idx > 0:
                 print(f"  [TEST MODE] Skipping remaining days...")
                 break
@@ -299,30 +220,28 @@ def process_single_eke_file(filepath, hycom_grid, coords_info, all_metadata):
                 if (day_idx + 1) % 10 == 0 or (day_idx + 1) == total_days:
                     print(f"    Day {day_idx + 1:3d}/{total_days}: {date_str}")
 
-                # Calculate diffusivity (NO bounds!)
-                K_eke = calculate_diffusivity(ugosa_day, vgosa_day)
+                # Calculate pure EKE
+                eke = calculate_pure_eke(ugosa_day, vgosa_day)
 
                 # Interpolate to HYCOM grid
-                K_hycom = interpolate_to_hycom_grid(
-                    K_eke, eke_lon, eke_lat,
+                eke_hycom = interpolate_to_hycom_grid(
+                    eke, eke_lon, eke_lat,
                     hycom_grid['lon_grid'], hycom_grid['lat_grid']
                 )
 
-                # Save in optimized format
-                file_info = save_daily_k_file_optimized(
-                    K_hycom, date_for_file, coords_info, DAILY_OUTPUT_DIR
+                # Save
+                file_info = save_daily_eke_file(
+                    eke_hycom, date_for_file, coords_info, DAILY_OUTPUT_DIR
                 )
 
-                # Add to metadata
                 all_metadata['dates'].append(file_info['date'])
                 all_metadata['files'].append(file_info)
 
-                # Update stats
                 file_stats['days_processed'] += 1
                 file_stats['total_size'] += file_info['size']
 
                 # Clean up
-                del ugosa_day, vgosa_day, K_eke, K_hycom
+                del ugosa_day, vgosa_day, eke, eke_hycom
                 if day_idx % 20 == 0:
                     gc.collect()
 
@@ -333,7 +252,6 @@ def process_single_eke_file(filepath, hycom_grid, coords_info, all_metadata):
 
         ds.close()
         print(f"  ✅ Processed {file_stats['days_processed']} days")
-        print(f"  📊 File size: {file_stats['total_size'] / 1024 / 1024:.1f}MB")
 
     except Exception as e:
         print(f"❌ Failed to process file: {e}")
@@ -341,23 +259,15 @@ def process_single_eke_file(filepath, hycom_grid, coords_info, all_metadata):
     return all_metadata, file_stats
 
 
-# ===== MAIN =====
-
 def main():
     print("\n" + "=" * 70)
-    print("🔥 ULTRA-OPTIMIZED EKE PROCESSING - PHYSICS-BASED")
-    print("=" * 70)
-    print(f"🔧 Configuration:")
-    print(f"   ALPHA = {ALPHA} (anomaly scaling factor)")
-    print(f"   C = {C} (empirical constant)")
-    print(f"   T_L = {T_L_DAYS} days")
-    print(f"   NO artificial bounds on K values")
+    print("📊 PURE EKE EXTRACTION - NO PHYSICS")
     print("=" * 70)
 
     # Load HYCOM grid
     hycom_grid = load_hycom_grid()
 
-    # Create single coordinates file
+    # Create coordinates file
     coords_info = save_coordinates_file(
         hycom_grid['lon_grid'],
         hycom_grid['lat_grid'],
@@ -366,60 +276,44 @@ def main():
 
     # Initialize metadata
     metadata = {
-        'description': 'Ultra-optimized daily diffusivity for HYCOM grid - NO artificial bounds',
-        'physics': {
-            'formula': 'K = C * (ALPHA * EKE) * T_L where EKE = 0.5*(ugosa² + vgosa²)',
-            'constants': {
-                'C': C,
-                'ALPHA': ALPHA,
-                'T_L_days': T_L_DAYS,
-                'T_L_seconds': T_L_SECONDS
-            },
-            'notes': 'NO artificial bounds on K values - physics determines range',
-            'units': 'm²/s'
-        },
+        'description': 'Pure EKE from CMEMS ugosa/vgosa on HYCOM grid',
+        'formula': 'EKE = 0.5*(ugosa² + vgosa²)',
         'grid': {
-            'source': 'HYCOM 0.04° grid',
             'n_lat': coords_info['n_lat'],
             'n_lon': coords_info['n_lon'],
             'total_cells': coords_info['total_cells'],
             'coordinates_file': 'eke_coords.bin'
         },
-        'optimization': {
-            'format': 'float16 (2 bytes per value)',
-            'coordinates_stored': 'once',
-            'compression': '85% vs original float32'
-        },
-        'time_period': '2011-03-01 to 2013-02-28',
+        'units': 'm²/s²',
+        'time_period': '2011-01-01 to 2013-12-31',
         'dates': [],
         'files': [],
         'processing_date': datetime.now().isoformat(),
         'binary_format': {
-            'version': 6,
-            'coordinates_header': '3 integers: version, n_lat, n_lon',
-            'daily_header': '5 integers: version, year, month, day, max_error×1000',
-            'data': 'float16 K values only'
+            'version': 1,
+            'daily_header': '4 integers: version, year, month, day',
+            'data': 'float16 EKE values'
         }
     }
 
-    # Get all EKE files
-    eke_files = []
+    # Get all CMEMS files
+    cmems_files = []
     for filename in sorted(os.listdir(INPUT_DIR)):
         if filename.endswith('.nc'):
-            eke_files.append(os.path.join(INPUT_DIR, filename))
+            cmems_files.append(os.path.join(INPUT_DIR, filename))
 
-    if not eke_files:
+    if not cmems_files:
         print(f"❌ No .nc files found in {INPUT_DIR}")
         return
 
-    print(f"\n📚 Found {len(eke_files)} EKE data files")
+    print(f"\n📚 Found {len(cmems_files)} CMEMS files")
 
     # Process each file
     total_stats = {'days_processed': 0, 'errors': 0, 'total_size': 0}
 
-    for file_idx, filepath in enumerate(eke_files, 1):
+    for file_idx, filepath in enumerate(cmems_files, 1):
         print(f"\n{'=' * 60}")
-        print(f"FILE {file_idx}/{len(eke_files)}")
+        print(f"FILE {file_idx}/{len(cmems_files)}")
 
         metadata, file_stats = process_single_eke_file(
             filepath, hycom_grid, coords_info, metadata
@@ -429,61 +323,25 @@ def main():
         total_stats['errors'] += file_stats['errors']
         total_stats['total_size'] += file_stats['total_size']
 
-        # Stop after first file in test mode
         if TEST_MODE:
             print(f"\n[TEST MODE] Stopping after first file")
             break
 
-    # Finalize metadata
+    # Finalize
     metadata['total_days'] = len(metadata['dates'])
+    metadata['total_size_gb'] = total_stats['total_size'] / (1024 ** 3)
 
-    # Calculate storage summary
-    coords_size_mb = coords_info['file_size'] / (1024 ** 2)
-    if total_stats['days_processed'] > 0:
-        daily_avg_mb = total_stats['total_size'] / total_stats['days_processed'] / (1024 ** 2)
-    else:
-        daily_avg_mb = 0
-
-    total_gb = (coords_info['file_size'] + total_stats['total_size']) / (1024 ** 3)
-
-    metadata['storage_summary'] = {
-        'coordinates_size_mb': coords_size_mb,
-        'total_daily_size_mb': total_stats['total_size'] / (1024 ** 2),
-        'average_daily_size_mb': daily_avg_mb,
-        'estimated_total_gb': total_gb,
-        'days_processed': total_stats['days_processed']
-    }
-
-    # Save metadata
     metadata_path = os.path.join(OUTPUT_DIR, 'eke_metadata.json')
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
 
-    # Print results
     print("\n" + "=" * 70)
     print("🎉 PROCESSING COMPLETE!")
     print("=" * 70)
-
-    print(f"\n📊 RESULTS SUMMARY:")
-    print(f"  Coordinates file: {coords_size_mb:.1f}MB (loaded once)")
-    print(f"  Daily files: {daily_avg_mb:.1f}MB each (float16)")
+    print(f"\n📊 RESULTS:")
     print(f"  Days processed: {total_stats['days_processed']}")
-    print(f"  Total size: {total_gb:.1f}GB")
-    print(f"  Savings vs float32: {((24.6 - daily_avg_mb) / 24.6 * 100):.0f}% per file!")
-
-    print(f"\n📁 Output structure:")
-    print(f"  {OUTPUT_DIR}/")
-    print(f"    ├── eke_coords.bin     (coordinates)")
-    print(f"    ├── daily/             ({total_stats['days_processed']} daily files)")
-    print(f"    └── eke_metadata.json  (this info)")
-
-    print(f"\n🚀 Ready for StreamingEKELoader.js!")
-    print(f"   Grid: {coords_info['n_lat']}×{coords_info['n_lon']}")
-    print(f"   Daily streaming: ~{daily_avg_mb:.1f}MB per timestep")
-
-    if TEST_MODE:
-        print(f"\n⚠️  TEST MODE: Only processed first file")
-        print(f"   Set TEST_MODE = False for full implementation")
+    print(f"  Total size: {metadata['total_size_gb']:.1f}GB")
+    print(f"  Average per day: {total_stats['total_size']/total_stats['days_processed']/1024/1024:.1f}MB")
 
 
 if __name__ == "__main__":
