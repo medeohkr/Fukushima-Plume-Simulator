@@ -1,81 +1,6 @@
 // streamingHYCOMLoader_3D.js - 3D MULTI-DEPTH STREAMING with KD-TREE ACCELERATION
 console.log('=== Streaming HYCOM Loader 3D (KD-Tree Accelerated) ===');
 
-// ============================================================================
-// KD-TREE FOR ULTRA-FAST NEAREST NEIGHBOR SEARCH
-// ============================================================================
-class KDTree {
-    constructor(points, depth = 0) {
-        if (points.length === 0) return;
-
-        const axis = depth % 2;
-        points.sort((a, b) => axis === 0 ? a.lon - b.lon : a.lat - b.lat);
-
-        const medianIndex = Math.floor(points.length / 2);
-        this.point = points[medianIndex];
-
-        const leftPoints = points.slice(0, medianIndex);
-        const rightPoints = points.slice(medianIndex + 1);
-
-        if (leftPoints.length) this.left = new KDTree(leftPoints, depth + 1);
-        if (rightPoints.length) this.right = new KDTree(rightPoints, depth + 1);
-    }
-
-    nearest(target, best = null, bestDist = Infinity, depth = 0) {
-        if (!this.point) return { best, bestDist };
-
-        const axis = depth % 2;
-        const point = this.point;
-
-        // Haversine distance in km
-        const dlat = (point.lat - target.lat) * Math.PI / 180;
-        const dlon = (point.lon - target.lon) * Math.PI / 180;
-        const a = Math.sin(dlat/2) * Math.sin(dlat/2) +
-                 Math.cos(target.lat * Math.PI/180) * Math.cos(point.lat * Math.PI/180) *
-                 Math.sin(dlon/2) * Math.sin(dlon/2);
-        const dist = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-
-        if (dist < bestDist) {
-            best = point;
-            bestDist = dist;
-        }
-
-        const [firstSide, secondSide] = axis === 0
-            ? (target.lon < point.lon ? [this.left, this.right] : [this.right, this.left])
-            : (target.lat < point.lat ? [this.left, this.right] : [this.right, this.left]);
-
-        if (firstSide) {
-            const result = firstSide.nearest(target, best, bestDist, depth + 1);
-            best = result.best;
-            bestDist = result.bestDist;
-        }
-
-        const planeDist = axis === 0
-            ? Math.abs(target.lon - point.lon) * 111 * Math.cos(target.lat * Math.PI/180)
-            : Math.abs(target.lat - point.lat) * 111;
-
-        if (planeDist < bestDist && secondSide) {
-            const result = secondSide.nearest(target, best, bestDist, depth + 1);
-            best = result.best;
-            bestDist = result.bestDist;
-        }
-
-        return { best, bestDist };
-    }
-
-    get size() {
-        return 1 + (this.left?.size || 0) + (this.right?.size || 0);
-    }
-
-    get height() {
-        return 1 + Math.max(this.left?.height || 0, this.right?.height || 0);
-    }
-}
-
-// ============================================================================
-// STREAMING HYCOM LOADER 3D
-// ============================================================================
-
 class StreamingHYCOMLoader_3D {
     constructor() {
         this.metadata = null;
@@ -83,88 +8,38 @@ class StreamingHYCOMLoader_3D {
         this.loadedDays = new Map();
         this.loadingPromises = new Map();
         this.activeDayKey = null;
-        this.baseDate = new Date('2011-03-01T00:00:00Z');
+        this.baseDate = new Date('2011-01-01T00:00:00Z');
         this.defaultDepth = 0;
         this.maxDaysInMemory = 2;
+        this.minLon = 100;
+        this.maxLon = 260; 
+        this.minLat = 0;
+        this.maxLat = 65;
+        this.lonStep = 1/12;  // 0.08333
+        this.latStep = 1/12;
+        this.nLon = 1921;
+        this.nLat = 781;
 
-        // KD-Tree
-        this.kdTree = null;
-        this.kdTreeBuildTime = 0;
 
-        // Debug
-        this.debug = {
-            enabled: true,
-            counters: {
-                findNearestCell: 0,
-                isOcean: 0,
-                getVelocityAt: 0,
-                getVelocitiesAtMultiple: 0,
-                loadDayByDate: 0,
-                kdTreeLookups: 0
-            },
-            startTime: Date.now(),
-            lastLogTime: Date.now()
-        };
-
-        if (this.debug.enabled) {
-            setInterval(() => this.logDebugStats(), 10000);
-        }
 
         console.log("🌊 3D HYCOM Loader initialized");
     }
 
-    // ==================== DEBUG ====================
-
-    logDebugStats() {
-
-    }
-
-    incrementCounter(name) {
-
-    }
-
-    // ==================== KD-TREE ====================
-
-    buildKDTree() {
-        console.log('🌳 Building KD-tree...');
-        const start = performance.now();
-
-        const firstDay = this.loadedDays.values().next().value;
-        if (!firstDay) return false;
-
-        const { nLat, nLon, lonArray, latArray } = firstDay;
-        const points = [];
-
-        for (let i = 0; i < nLat; i += 2) {
-            for (let j = 0; j < nLon; j += 2) {
-                const idx = i * nLon + j;
-                const lon = lonArray[idx];
-                const lat = latArray[idx];
-                if (!isNaN(lon)) points.push({ i, j, idx, lon, lat });
-            }
-        }
-
-        this.kdTree = new KDTree(points);
-        this.kdTreeBuildTime = performance.now() - start;
-
-        console.log(`  ✅ KD-tree built: ${points.length.toLocaleString()} points in ${this.kdTreeBuildTime.toFixed(0)}ms`);
-        return true;
-    }
 
     findNearestCell(lon, lat) {
-        this.incrementCounter('findNearestCell');
-
-        if (!this.kdTree) return null;
-
-        this.incrementCounter('kdTreeLookups');
-        const result = this.kdTree.nearest({ lon, lat });
-
-        return result.best ? {
-            i: result.best.i,
-            j: result.best.j,
-            idx: result.best.idx,
-            distance: result.bestDist
-        } : null;
+        const lon_idx = Math.round((lon - this.minLon) / this.lonStep);
+        const lat_idx = Math.round((lat - this.minLat) / this.latStep);
+        
+        // Clamp to valid range
+        const lon_idx_clamped = Math.max(0, Math.min(lon_idx, this.nLon - 1));
+        const lat_idx_clamped = Math.max(0, Math.min(lat_idx, this.nLat - 1));
+        
+        return {
+            lon_idx: lon_idx_clamped,
+            lat_idx: lat_idx_clamped,
+            idx: lat_idx_clamped * this.nLon + lon_idx_clamped,  // flattened index
+            distance: 0  // Not needed for GLORYS, but expected
+        };
     }
 
     // ==================== INIT ====================
@@ -182,7 +57,7 @@ class StreamingHYCOMLoader_3D {
     }
 
     async loadMetadata() {
-        const response = await fetch('../data/currents_3d_bin/currents_3d_metadata.json');
+        const response = await fetch('../data/glorys_3yr_bin/glorys_metadata.json');
         this.metadata = await response.json();
 
         this.daysByOffset = {};
@@ -205,7 +80,6 @@ class StreamingHYCOMLoader_3D {
     }
 
     async loadDayByDate(year, month, day) {
-        this.incrementCounter('loadDayByDate');
 
         const dateKey = `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
 
@@ -223,7 +97,6 @@ class StreamingHYCOMLoader_3D {
             this.loadedDays.set(dateKey, data);
             this.activeDayKey = dateKey;
 
-            if (!this.kdTree) this.buildKDTree();
 
             this._enforceMemoryLimit();
             return data;
@@ -231,9 +104,22 @@ class StreamingHYCOMLoader_3D {
             this.loadingPromises.delete(dateKey);
         }
     }
+    halfToFloat(h) {
+        let s = (h & 0x8000) >> 15;
+        let e = (h & 0x7C00) >> 10;
+        let f = h & 0x03FF;
+        
+        if(e == 0) {
+            return (s ? -1 : 1) * Math.pow(2, -14) * (f / Math.pow(2, 10));
+        } else if(e == 0x1F) {
+            return f ? NaN : (s ? -Infinity : Infinity);
+        } else {
+            return (s ? -1 : 1) * Math.pow(2, e-15) * (1 + f / Math.pow(2, 10));
+        }
+    }
 
     async _loadDay(dateKey, year, month, day) {
-        const path = `../data/currents_3d_bin/currents_${year}_${String(month).padStart(2,'0')}_${String(day).padStart(2,'0')}.bin`;
+        const path = `../data/glorys_3yr_bin/glorys_${year}${String(month).padStart(2,'0')}${String(day).padStart(2,'0')}.bin`;
 
         const start = performance.now();
         const response = await fetch(path);
@@ -243,7 +129,7 @@ class StreamingHYCOMLoader_3D {
         const view = new DataView(buffer);
         const version = view.getInt32(0, true);
 
-        if (version !== 4) throw new Error(`Unsupported version: ${version}`);
+        if (version !== 2) throw new Error(`Unsupported version: ${version}`);
 
         const nLat = view.getInt32(4, true);
         const nLon = view.getInt32(8, true);
@@ -261,10 +147,27 @@ class StreamingHYCOMLoader_3D {
         const u = new Float32Array(totalPoints);
         const v = new Float32Array(totalPoints);
 
+        const lonSize = totalCells * 4;        // bytes for lon (float32)
+        const latSize = totalCells * 4;        // bytes for lat (float32)
+        const uSize = totalPoints * 2;         // bytes for u (float16)
+
+        // Read lon (float32)
         lon.set(new Float32Array(buffer, headerSize, totalCells));
-        lat.set(new Float32Array(buffer, headerSize + totalCells*4, totalCells));
-        u.set(new Float32Array(buffer, headerSize + 2*totalCells*4, totalPoints));
-        v.set(new Float32Array(buffer, headerSize + 2*totalCells*4 + totalPoints*4, totalPoints));
+        
+        // Read lat (float32) - after lon
+        lat.set(new Float32Array(buffer, headerSize + lonSize, totalCells));
+        
+        // Read u (float16) - after lat
+        const u16 = new Uint16Array(buffer, headerSize + lonSize + latSize, totalPoints);
+        for (let i = 0; i < totalPoints; i++) {
+            u[i] = this.halfToFloat(u16[i]);
+        }
+        
+        // Read v (float16) - after u
+        const v16 = new Uint16Array(buffer, headerSize + lonSize + latSize + uSize, totalPoints);
+        for (let i = 0; i < totalPoints; i++) {
+            v[i] = this.halfToFloat(v16[i]);
+        }
 
         console.log(`  Loaded ${dateKey} in ${(performance.now()-start).toFixed(0)}ms`);
 
@@ -276,6 +179,7 @@ class StreamingHYCOMLoader_3D {
             fileSize: buffer.byteLength
         };
     }
+
 
     _enforceMemoryLimit() {
         if (this.loadedDays.size <= this.maxDaysInMemory) return;
@@ -331,7 +235,6 @@ class StreamingHYCOMLoader_3D {
     // ==================== VELOCITY LOOKUPS ====================
 
     async getVelocityAt(lon, lat, depth = null, simDay = 0) {
-        this.incrementCounter('getVelocityAt');
 
         const targetDepth = depth ?? this.defaultDepth;
         const depthIdx = this.getDepthIndex(targetDepth);
@@ -359,7 +262,6 @@ class StreamingHYCOMLoader_3D {
     }
 
     async getVelocitiesAtMultiple(positions, depth = null, simDay = 0) {
-        this.incrementCounter('getVelocitiesAtMultiple');
 
         const targetDepth = depth ?? this.defaultDepth;
         const depthIdx = this.getDepthIndex(targetDepth);
@@ -401,7 +303,6 @@ class StreamingHYCOMLoader_3D {
     // ==================== OCEAN CHECKS ====================
 
     async isOcean(lon, lat, depth = 0, simDay = 0) {
-        this.incrementCounter('isOcean');
 
         try {
             const vel = await this.getVelocityAt(lon, lat, depth, simDay);

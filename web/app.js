@@ -36,7 +36,7 @@ let locationMarker = null;
 // Heatmap
 let heatmapParams = {
     intensity: 1.0,
-    radiusPixels: 35,
+    radiusPixels: 45,
     opacity: 0.9,
     threshold: 0.001,
     useLogScale: true,

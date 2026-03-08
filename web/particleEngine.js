@@ -459,40 +459,14 @@ class ParticleEngine3D {
             const lon = this.REFERENCE_LON + (p.x / this.LON_SCALE);
             const lat = this.REFERENCE_LAT + (p.y / this.LAT_SCALE);
             
-            // DEBUG: Log the inputs
-            console.log({
-                lon, lat,
-                currentSimDay,
-                p_x: p.x,
-                p_y: p.y
-            });
-            
             const ekeResult = await this.ekeLoader.getDiffusivityAt(lon, lat, currentSimDay);
             
-            // DEBUG: What came back?
-            console.log('ekeResult:', ekeResult);
-            
+
             let K_m2_s = ekeResult.found ?
                 ekeResult.K * this.params.diffusivityScale * (this.tracer.behavior.diffusivityScale || 1.0) :
                 20 * this.params.diffusivityScale;
             
-            // DEBUG: Calculated K
-            console.log('K_m2_s:', K_m2_s, 'from:', {
-                found: ekeResult.found,
-                eke_K: ekeResult.K,
-                diffusivityScale: this.params.diffusivityScale,
-                tracerScale: this.tracer.behavior.diffusivityScale
-            });
-            
             const stepScale_km = Math.sqrt(2 * K_m2_s * deltaDays * 86400) / 1000;
-            
-            // DEBUG: Step calculation
-            console.log('stepScale_km:', stepScale_km, 'from:', {
-                K: K_m2_s,
-                deltaDays,
-                seconds: deltaDays * 86400,
-                sqrt_arg: 2 * K_m2_s * deltaDays * 86400
-            });
             
             p.x += stepScale_km * this.gaussianRandom();
             p.y += stepScale_km * this.gaussianRandom();
